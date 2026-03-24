@@ -1,0 +1,7 @@
+venv
+requirements.txt
+.env
+.vscode/
+app.py
+templates/
+requirements.txt

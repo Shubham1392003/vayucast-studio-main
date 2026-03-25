@@ -70,28 +70,28 @@ const Signup = () => {
 
           <form className="space-y-4 sm:space-y-5" onSubmit={handleSignup}>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Input 
-                placeholder="Enter Name" 
+              <Input
+                placeholder="Enter Name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
-              <Input 
-                type="email" 
-                placeholder="Enter Email" 
+              <Input
+                type="email"
+                placeholder="Enter Email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
               />
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Input 
-                type="password" 
-                placeholder="Enter Password" 
+              <Input
+                type="password"
+                placeholder="Enter Password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
-              <Input 
-                type="password" 
-                placeholder="Confirm Password" 
+              <Input
+                type="password"
+                placeholder="Confirm Password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
               />

@@ -150,7 +150,8 @@ def predict(request):
             "predicted_pm25": prediction,
             "lat": lat,
             "lon": lon,
-            "timestamp": datetime.datetime.now().isoformat()
+            "timestamp": datetime.datetime.now().isoformat(),
+            "ml_model_features": dict(zip(feature_names, features))
         }
 
         # Store the required data for the model and the prediction result into Firebase Firestore

@@ -22,10 +22,33 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-backend/ml/data/raw
-backend/ml/data/processed
+#backend/ml/data/raw
+#backend/ml/data/processed
 backend/ml/models
 backend/server/db.sqlite3
-backend/server/venv
-backend/ml/venv
-backend/server/venv
+# backend/server/venv
+# backend/ml/venv
+# backend/server/venv
+
+# Python / Django / Backend
+__pycache__/
+*.py[cod]
+*$py.class
+*.sqlite3
+db.sqlite3
+media/
+staticfiles/
+
+# Virtual Environments (This fixes the 10,000 files!)
+venv/
+env/
+backend/server/venv/
+backend/venv/
+.venv/
+ENV/
+
+# Environment Variables (Security)
+.env
+.env.*
+!.env.example
+backend/server/.env

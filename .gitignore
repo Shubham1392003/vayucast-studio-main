@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+backend/ml/data/raw
+backend/ml/data/processed
+backend/ml/models
+backend/server/db.sqlite3
+backend/server/venv
+backend/ml/venv
+backend/server/venv

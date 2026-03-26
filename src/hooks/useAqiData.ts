@@ -148,7 +148,6 @@ export function useAqiData(lat?: number, lon?: number): UseAqiDataReturn {
     if (cachedData && cacheTime && Date.now() - cacheTime < CACHE_TTL_MS) {
       listener(cachedData, false, null);
     } else {
-      // Try user geolocation first, then fallback
       if (lat !== undefined && lon !== undefined) {
         fetchAndBroadcast(lat, lon);
       } else if (navigator.geolocation) {
@@ -157,8 +156,11 @@ export function useAqiData(lat?: number, lon?: number): UseAqiDataReturn {
             coordsRef.current = { lat: coords.latitude, lon: coords.longitude };
             fetchAndBroadcast(coords.latitude, coords.longitude);
           },
-          () => fetchAndBroadcast(coordsRef.current.lat, coordsRef.current.lon),
-          { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 }
+          (err) => {
+            console.warn("[useAqiData] Geolocation failed:", err.message);
+            fetchAndBroadcast(coordsRef.current.lat, coordsRef.current.lon);
+          },
+          { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 }
         );
       } else {
         fetchAndBroadcast(coordsRef.current.lat, coordsRef.current.lon);

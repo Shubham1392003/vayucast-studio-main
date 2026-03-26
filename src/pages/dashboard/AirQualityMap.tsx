@@ -12,15 +12,15 @@ const DEFAULT_LOCATION = { lat: 18.5204, lon: 73.8567 };
 
 /* ── AQI helpers ─────────────────────────────────────────────────────────── */
 const getAqiColorClass = (aqi: number, bg = false) => {
-  if (aqi <= 50)  return bg ? "bg-success text-success-foreground"   : "text-success";
-  if (aqi <= 100) return bg ? "bg-warning text-warning-foreground"   : "text-warning";
-  if (aqi <= 150) return bg ? "bg-warning text-warning-foreground"   : "text-warning";
+  if (aqi <= 50) return bg ? "bg-success text-success-foreground" : "text-success";
+  if (aqi <= 100) return bg ? "bg-warning text-warning-foreground" : "text-warning";
+  if (aqi <= 150) return bg ? "bg-warning text-warning-foreground" : "text-warning";
   if (aqi <= 200) return bg ? "bg-destructive text-destructive-foreground" : "text-destructive";
   return bg ? "bg-destructive text-destructive-foreground" : "text-destructive";
 };
 
 const getAqiCategory = (aqi: number) => {
-  if (aqi <= 50)  return "Good";
+  if (aqi <= 50) return "Good";
   if (aqi <= 100) return "Moderate";
   if (aqi <= 150) return "Unhealthy for Sensitive Groups";
   if (aqi <= 200) return "Unhealthy";
@@ -29,7 +29,7 @@ const getAqiCategory = (aqi: number) => {
 };
 
 const getMarkerColor = (aqi: number) => {
-  if (aqi <= 50)  return "http://maps.google.com/mapfiles/ms/icons/green-dot.png";
+  if (aqi <= 50) return "http://maps.google.com/mapfiles/ms/icons/green-dot.png";
   if (aqi <= 100) return "http://maps.google.com/mapfiles/ms/icons/yellow-dot.png";
   if (aqi <= 150) return "http://maps.google.com/mapfiles/ms/icons/orange-dot.png";
   return "http://maps.google.com/mapfiles/ms/icons/red-dot.png";
@@ -54,25 +54,25 @@ const AirQualityMap = () => {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => setLocation({ lat: coords.latitude, lon: coords.longitude }),
-      () => {},
+      () => { },
       { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 }
     );
   }, []);
 
   const junctions = useMemo(() => {
     const names = [
-      "City Center Junction", "Northern Bypass", "Industrial Sector", 
-      "Residential Cross", "Old Town Square", "Station Road", 
+      "City Center Junction", "Northern Bypass", "Industrial Sector",
+      "Residential Cross", "Old Town Square", "Station Road",
       "Tech Park Entry", "Green Belt Terminal"
     ];
-    
+
     return Array.from({ length: 8 }).map((_, i) => {
       // Create a stable deterministic-ish offset based on the index
       const angle = (i * 2 * Math.PI) / 8;
       const radius = 0.015 + (i % 3) * 0.005;
       const lat = location.lat + Math.cos(angle) * radius;
       const lng = location.lon + Math.sin(angle) * radius;
-      
+
       // Derive AQI with some variation from center
       const baseAqi = data?.currentAqi ?? 85;
       const variation = (i % 2 === 0 ? 1 : -1) * (10 + (i * 5));
@@ -106,9 +106,9 @@ const AirQualityMap = () => {
     );
   };
 
-  const currentAqi   = data?.currentAqi   ?? 85;
+  const currentAqi = data?.currentAqi ?? 85;
   const predictedAqi = data?.predictedAqi ?? 80;
-  const confidence   = data?.confidence   ?? 0;
+  const confidence = data?.confidence ?? 0;
 
   if (loadError) {
     return (
@@ -130,21 +130,21 @@ const AirQualityMap = () => {
       <div className="relative min-h-[320px] flex-1 bg-secondary/20 sm:min-h-[420px]">
         {/* Map Hint / Reset */}
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-4 w-full justify-center">
-           <div className="rounded-full bg-card/90 px-4 py-1.5 text-[10px] sm:text-xs text-muted-foreground shadow-card backdrop-blur-sm border border-border/50 truncate max-w-[200px] sm:max-w-none">
-             <MapPin className="h-3 w-3 inline mr-1 text-primary" />
-             {manualLocation ? "Custom Location Active" : "Click map to explore AQI"}
-           </div>
-           
-           <Button
-              variant={manualLocation ? "default" : "outline"}
-              size="sm"
-              className="h-8 rounded-full shadow-card bg-card/95 border-primary/20 hover:bg-primary/5 text-foreground hidden sm:flex"
-              onClick={handleLocateMe}
-              title="Go to my live GPS location"
-           >
-             <Crosshair className={`h-3 w-3 mr-1 ${manualLocation ? "text-primary-foreground" : "text-primary"}`} />
-             {manualLocation ? "Reset to GPS" : "Locate Me"}
-           </Button>
+          <div className="rounded-full bg-card/90 px-4 py-1.5 text-[10px] sm:text-xs text-muted-foreground shadow-card backdrop-blur-sm border border-border/50 truncate max-w-[200px] sm:max-w-none">
+            <MapPin className="h-3 w-3 inline mr-1 text-primary" />
+            {manualLocation ? "Custom Location Active" : "Click map to explore AQI"}
+          </div>
+
+          <Button
+            variant={manualLocation ? "default" : "outline"}
+            size="sm"
+            className="h-8 rounded-full shadow-card bg-card/95 border-primary/20 hover:bg-primary/5 text-foreground hidden sm:flex"
+            onClick={handleLocateMe}
+            title="Go to my live GPS location"
+          >
+            <Crosshair className={`h-3 w-3 mr-1 ${manualLocation ? "text-primary-foreground" : "text-primary"}`} />
+            {manualLocation ? "Reset to GPS" : "Locate Me"}
+          </Button>
         </div>
 
         {(!isLoaded || mapLoading) && (
@@ -200,8 +200,8 @@ const AirQualityMap = () => {
             ))}
 
             {selectedMarker === "user" && (
-              <InfoWindow 
-                position={{ lat: location.lat, lng: location.lon }} 
+              <InfoWindow
+                position={{ lat: location.lat, lng: location.lon }}
                 onCloseClick={() => setSelectedMarker(null)}
               >
                 <div className="p-1">
@@ -214,9 +214,9 @@ const AirQualityMap = () => {
             )}
 
             {junctions.map((j) => selectedMarker === j.id && (
-              <InfoWindow 
+              <InfoWindow
                 key={`info-${j.id}`}
-                position={j.position} 
+                position={j.position}
                 onCloseClick={() => setSelectedMarker(null)}
               >
                 <div className="p-1">
@@ -232,8 +232,8 @@ const AirQualityMap = () => {
         {/* Dynamic Floating Overlays for Top 2 Junctions */}
         <div className="absolute bottom-4 left-4 right-4 flex flex-col sm:flex-row gap-3 pointer-events-none">
           {junctions.slice(0, 2).map((j, idx) => (
-            <div 
-              key={idx} 
+            <div
+              key={idx}
               className={`rounded-xl bg-card/95 p-3 shadow-card backdrop-blur border border-border/50 animate-in fade-in slide-in-from-bottom-2 duration-500 pointer-events-auto ${idx > 0 ? "hidden md:block" : ""}`}
             >
               <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{j.name}</p>

@@ -67,7 +67,7 @@ interface UseAqiDataReturn {
   loading: boolean;
   error: string | null;
   lastUpdated: Date | null;
-  refresh: () => void;
+  refresh: (lat?: number, lon?: number) => void;
 }
 
 const ML_BACKEND_URL = import.meta.env.VITE_ML_BACKEND_URL || "http://localhost:5000";
@@ -132,8 +132,11 @@ export function useAqiData(lat?: number, lon?: number): UseAqiDataReturn {
     if (d) setLastUpdated(new Date());
   }, []);
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback((newLat?: number, newLon?: number) => {
     cacheTime = null; // invalidate cache
+    if (newLat !== undefined && newLon !== undefined) {
+      coordsRef.current = { lat: newLat, lon: newLon };
+    }
     fetchAndBroadcast(coordsRef.current.lat, coordsRef.current.lon);
   }, []);
 

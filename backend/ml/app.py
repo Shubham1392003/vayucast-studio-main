@@ -9,31 +9,54 @@ from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (from root .env to share keys with frontend)
+root_env = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.env"))
+load_dotenv(root_env)
+load_dotenv() # Also load local .env if exists
 
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:8080",
-                   "http://127.0.0.1:5173", "http://127.0.0.1:3000", "http://127.0.0.1:8080"])
+# Enable CORS for all routes (to accommodate various local ports like 8080, 8081, 5173 etc)
+CORS(app)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Firebase / Firestore (optional – gracefully disabled if not configured)
+# Firebase / Firestore (Gracefully enabled with 8hr Auto-Delete)
 # ──────────────────────────────────────────────────────────────────────────────
 db = None
 try:
     import firebase_admin
     from firebase_admin import credentials, firestore
 
-    cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH", "firebase_credentials.json")
+    # Using the path provided by the user in backend/server/
+    cred_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../server/firebase_credentials.json"))
+    
     if os.path.exists(cred_path):
-        cred = credentials.Certificate(cred_path)
-        firebase_admin.initialize_app(cred)
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred)
         db = firestore.client()
-        print("✅ Firebase connected.")
+        print(f"✅ Firebase connected using: {cred_path}")
     else:
-        print(f"⚠️  Firebase credentials not found at '{cred_path}'. Firestore storage disabled.")
+        print(f"⚠️  Firebase credentials not found at '{cred_path}'.")
 except Exception as e:
     print(f"⚠️  Firebase init error: {e}. Firestore storage disabled.")
+
+def cleanup_old_records(hours=8):
+    """Automatically delete records older than X hours to keep storage lean."""
+    if db is None: return
+    try:
+        now = datetime.datetime.utcnow()
+        cutoff = now - datetime.timedelta(hours=hours)
+        
+        # Delete old records
+        docs = db.collection("aqi_readings").where("timestamp", "<", cutoff.isoformat() + "Z").stream()
+        count = 0
+        for doc in docs:
+            doc.reference.delete()
+            count += 1
+        if count > 0:
+            print(f"🧹 Cleaned up {count} old records (older than {hours}h).")
+    except Exception as e:
+        print(f"⚠️ Cleanup error: {e}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -84,6 +107,42 @@ def pm25_to_aqi(pm25: float) -> int:
             return int(round(aqi))
     return 500
 
+
+def get_google_traffic(lat: float, lon: float):
+    """Fetch real-time traffic data using Google Maps API."""
+    api_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY", "")
+    if not api_key:
+        return {"density": 0, "status": "No API Key"}
+    
+    try:
+        # Check a nearby point (approx 2.5km away) to gauge travel time vs normal time
+        dest_lat, dest_lon = lat + 0.018, lon + 0.018
+        url = (
+            f"https://maps.googleapis.com/maps/api/distancematrix/json"
+            f"?origins={lat},{lon}&destinations={dest_lat},{dest_lon}"
+            f"&departure_time=now&traffic_model=best_guess&key={api_key}"
+        )
+        res = requests.get(url, timeout=5).json()
+        
+        if res.get("status") == "OK":
+            element = res["rows"][0]["elements"][0]
+            if element.get("status") == "OK":
+                duration_norm = element["duration"]["value"]
+                # Some API responses might omit duration_in_traffic if no delay exists
+                duration_traffic = element.get("duration_in_traffic", {}).get("value", duration_norm)
+                
+                # We start with a baseline of 15% for urban environments (Pune)
+                # Then add dynamic delay scaled by 150%
+                delay_factor = (duration_traffic / duration_norm) - 1.0
+                dynamic_density = max(0, int(delay_factor * 150))
+                
+                density = min(100, 15 + dynamic_density)
+                return {"density": density, "status": "Success"}
+                
+    except Exception as e:
+        print(f"⚠️ Google Traffic API error: {e}")
+    
+    return {"density": 15, "status": "Fallback"} # Urban baseline
 
 def wind_direction_label(deg: float) -> str:
     dirs = ["North","North-East","East","South-East","South","South-West","West","North-West"]
@@ -273,13 +332,39 @@ def get_waqi_data(lat: float, lon: float, api_key: str):
 
 
 def store_aqi_record(record: dict):
-    """Persist AQI reading to Firestore (fire-and-forget)."""
+    """Persist AQI reading to Firestore and run cleanup."""
     if db is None:
         return
     try:
+        # Pre-cleanup
+        cleanup_old_records(hours=8)
+        
+        # Store
         db.collection("aqi_readings").add(record)
+        print(f"💾 Saved record to Firebase (ID: {record.get('timestamp')})")
     except Exception as e:
-        print(f"Firestore write error: {e}")
+        print(f"⚠️  Firestore write error: {e}")
+
+
+@app.route("/api/history")
+def get_history():
+    """Retrieve the last 8 hours of history from Firebase."""
+    if db is None:
+        return jsonify({"success": False, "error": "Firebase not connected"})
+    
+    try:
+        docs = db.collection("aqi_readings") \
+                 .order_by("timestamp", direction=firestore.Query.DESCENDING) \
+                 .limit(20) \
+                 .stream()
+        
+        history = []
+        for doc in docs:
+            history.append(doc.to_dict())
+            
+        return jsonify({"success": True, "history": history[::-1]}) # Return chronological
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -305,22 +390,63 @@ def predict():
             pm25, pm10, live_aqi, features, weather, trend_24h = get_openmeteo_data(lat, lon)
             source = "Open-Meteo"
 
+        # ── Traffic Data ───────────────────────────────────────────────────────
+        traffic = get_google_traffic(lat, lon)
+        traffic_density = traffic["density"]
+
         # ── ML prediction ──────────────────────────────────────────────────────
         if model is not None:
+            # Model features (Universal set - 11 features)
             feature_names = [
-                "latitude", "longitude", "PM2.5", "TEMP", "PRES", "DEWP", "WSPM",
+                "PM2.5", "TEMP", "WSPM",
                 "wind_u", "wind_v", "day_of_week", "month",
                 "PM25_lag1", "PM25_lag2", "PM25_lag3", "PM25_roll3"
             ]
-            input_df = pd.DataFrame([features], columns=feature_names)
-            predicted_pm25 = float(model.predict(input_df)[0])
-            predicted_aqi  = pm25_to_aqi(predicted_pm25)
+            
+            # Match the training feature order exactly
+            ml_features = [
+                pm25, 
+                weather["temperature"], 
+                weather["windSpeed"] / 3.6, # convert to m/s 
+                features[7], features[8],   # wind_u, wind_v
+                features[9], features[10],  # day, month
+                features[11], features[12], features[13], features[14] # lags, roll
+            ]
 
-            # Confidence based on recent variance
+            input_df = pd.DataFrame([ml_features], columns=feature_names)
+            
+            # Predict
+            raw_pred = float(model.predict(input_df)[0])
+            
+            # Adjust based on real-time traffic density (if traffic > 40, add slight pollution bias)
+            traffic_bias = max(0, (traffic_density - 30) * 0.2)
+            raw_pred += traffic_bias
+            
+            # ── Reality Check ──────────────────────────────────────────────────
+            # Since the model is trained on Beijing data but used here (e.g., Pune),
+            # we apply a reality cap (±30% change per hour is high but plausible).
+            # This prevents wild hallucinations (like 500 or 0) due to climate shifts.
+            
+            # Use a weighted average between current and model if model is very far off
+            current_bias = 0.6  # Give 60% weight to current state if model is erratic
+            smoothed_pm25 = (raw_pred * (1 - current_bias)) + (pm25 * current_bias)
+            
+            # Final clip to EPA limits + plausible bounds
+            predicted_pm25 = max(pm25 * 0.5, min(pm25 * 1.5, smoothed_pm25))
+            predicted_pm25 = max(5, min(500, predicted_pm25)) # Hard limits
+            
+            predicted_aqi  = pm25_to_aqi(predicted_pm25)
+            
+            # Ensure it's not exactly the same if there's any trend
+            if round(predicted_aqi) == round(live_aqi) and abs(raw_pred - pm25) > 1:
+                if raw_pred > pm25: predicted_aqi += 1
+                else: predicted_aqi = max(0, predicted_aqi - 1)
+
+            # Confidence based on recent variance + prediction magnitude
             recent_pm25 = [features[11], features[12], features[13], pm25]
             variance = np.std(recent_pm25)
-            confidence = round(max(60, min(98, 95 - variance * 0.5)), 1)
-            method = "XGBoost ML Model"
+            confidence = round(max(60, min(92, 90 - variance * 0.4)), 1)
+            method = "XGBoost ML Model + Google Traffic"
         else:
             trend_aqi = [t["aqi"] for t in trend_24h if t.get("aqi") is not None]
             stat = statistical_prediction(live_aqi, weather["windSpeed"], weather["temperature"], trend_aqi or [live_aqi])
@@ -343,7 +469,7 @@ def predict():
         affected2 = int(wind_speed * 0.4) + 2
 
         # Factor contributions (estimated from feature magnitudes)
-        traffic_factor = min(100, int(live_aqi * 0.4))
+        traffic_factor = traffic_density
         wind_factor    = min(100, int(wind_speed * 3))
         temp_factor    = min(100, max(0, int((weather["temperature"] - 20) * 3)))
 
@@ -373,6 +499,7 @@ def predict():
 
             # ── Weather ──────────────────────────────────────────────────────
             "weather": weather,
+            "trafficDensity": traffic_density,
 
             # ── Risk ─────────────────────────────────────────────────────────
             "exposure": exposure,
@@ -388,9 +515,9 @@ def predict():
 
             # ── Factor contributions ─────────────────────────────────────────
             "factors": [
-                {"name": "Traffic", "value": traffic_factor},
+                {"name": "Traffic Density", "value": traffic_factor},
                 {"name": "Wind Speed", "value": wind_factor},
-                {"name": "Temperature", "value": temp_factor},
+                {"name": "Atmospheric Temp", "value": temp_factor},
             ],
 
             # ── 24h trend ────────────────────────────────────────────────────

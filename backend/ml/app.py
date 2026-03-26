@@ -260,7 +260,18 @@ def predict():
         
         if db:
             cleanup_old_records()
-            db.collection("aqi_readings").add({"timestamp": res["timestamp"], "lat": lat, "lon": lon, "currentAqi": int(live_aqi), "predictedAqi": int(pred_aqi), "pm25": round(pm25, 2), "method": method})
+            db.collection("aqi_readings").add({
+                "timestamp": res["timestamp"], 
+                "lat": lat, 
+                "lon": lon, 
+                "currentAqi": int(live_aqi), 
+                "predictedAqi": int(pred_aqi), 
+                "pm25": round(pm25, 2),
+                "trafficDensity": traffic_density,
+                "temperature": weather.get("temperature"),
+                "windSpeed": weather.get("windSpeed"),
+                "method": method
+            })
         return jsonify(res)
     except Exception as e:
         import traceback

@@ -1,8 +1,8 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { AlertTriangle, Radar, Activity, RefreshCcw, MapPin, Wind, Crosshair } from "lucide-react";
+import { AlertTriangle, Radar, Activity, RefreshCcw, MapPin, Wind, Crosshair, Users, Square } from "lucide-react";
 import spreadIllustration from "@/assets/spread-illustration.png";
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { GoogleMap, Marker, Circle, Polyline, useJsApiLoader, InfoWindow } from "@react-google-maps/api";
 import { useAqiData } from "@/hooks/useAqiData";
 
@@ -15,6 +15,7 @@ interface Area {
 }
 
 const mapContainerStyle = { width: "100%", height: "100%" };
+const LIBRARIES: ("places")[] = ["places"];
 
 const getWindDirectionStr = (degree: number) => {
   const directions = ["North", "North-East", "East", "South-East", "South", "South-West", "West", "North-West"];
@@ -47,42 +48,77 @@ const PollutionSpread = () => {
   const [isRunning, setIsRunning] = useState(false);
   const [spreadRadius, setSpreadRadius] = useState(0); // in meters
   const [simulationStep, setSimulationStep] = useState(0);
+  const intervalRef = useRef<number | ReturnType<typeof setInterval> | null>(null);
 
   // Animation states
   const [pulseRadius, setPulseRadius] = useState(0);
   const [windOffset, setWindOffset] = useState(0);
+  const [mapInstance, setMapInstance] = useState<google.maps.Map | null>(null);
 
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
     id: "google-map-script",
+    libraries: LIBRARIES,
   });
 
   // Location for simulation origin
   const location = manualLocation || (data ? { lat: data.lat, lng: data.lon } : { lat: 18.5204, lng: 73.8567 });
 
-  // Generate mock areas around the location when location or data changes
+  // Wind metrics from data hook (moved up for filtering)
+  const windDirDeg = data?.weather?.windDirection ?? 90;
+  const windSpeed   = data?.weather?.windSpeed ?? 10;
+  const currentAqi  = data?.currentAqi ?? 50;
+
+  // Fetch real nearby places when location or map changes
   useEffect(() => {
-    if (!location || !data) return;
+    if (!mapInstance || !location || !data || !window.google) return;
     const baseAqi = data.currentAqi;
-    const names = ["Downtown", "Industrial Sector", "Residential Zone", "Tech Park", "City Hospital"];
-    const areas: Area[] = [];
-    for (let i = 0; i < 4; i++) {
-      areas.push({
-        id: `area-${i}`,
-        name: names[i % names.length],
-        lat: location.lat + (Math.random() - 0.5) * 0.04,
-        lng: location.lng + (Math.random() - 0.5) * 0.04,
-        baseAqi: Math.max(20, baseAqi + Math.floor((Math.random() - 0.5) * 40)),
-      });
-    }
-    setGeneratedAreas(areas);
-  }, [location.lat, location.lng, data?.currentAqi]);
+    
+    const service = new window.google.maps.places.PlacesService(mapInstance);
+    service.nearbySearch({
+      location: new window.google.maps.LatLng(location.lat, location.lng),
+      radius: 4000,
+      type: "establishment" // Fetch real establishments (hospitals, schools, parks)
+    }, (results, status) => {
+      if (status === window.google.maps.places.PlacesServiceStatus.OK && results) {
+        
+        // Compute wind flow vector to filter out upwind points
+        const rad = Math.PI / 180;
+        const flowLat = -Math.cos(windDirDeg * rad);
+        const flowLng = -Math.sin(windDirDeg * rad);
+
+        const downwindResults = results.filter(place => {
+          const pLat = place.geometry?.location?.lat();
+          const pLng = place.geometry?.location?.lng();
+          if (!pLat || !pLng) return false;
+          
+          const dLat = pLat - location.lat;
+          const dLng = pLng - location.lng;
+          
+          // Dot product > 0 means the place is mostly in the downwind direction
+          return (dLat * flowLat) + (dLng * flowLng) > 0;
+        });
+
+        const validResults = downwindResults.slice(0, 10);
+        const areas: Area[] = validResults.map((place, i) => ({
+          id: place.place_id || `place-${i}`,
+          name: place.name || "Unknown Area",
+          lat: place.geometry?.location?.lat() || location.lat,
+          lng: place.geometry?.location?.lng() || location.lng,
+          baseAqi: Math.max(20, baseAqi + Math.floor((Math.random() - 0.5) * 30)),
+        }));
+        setGeneratedAreas(areas);
+      } else {
+        setGeneratedAreas([]);
+      }
+    });
+  }, [mapInstance, location.lat, location.lng, data?.currentAqi, windDirDeg]);
 
   // Continuous background animations (wind + pulse)
   useEffect(() => {
     const int = setInterval(() => {
-      setPulseRadius((prev) => (prev > 1000 ? 0 : prev + 20)); // Pulsing ring around source
-      setWindOffset((prev) => (prev >= 100 ? 0 : prev + 2));   // Wind arrow movement 0% to 100%
+      setPulseRadius((prev) => (prev > 1000 ? 0 : prev + 5)); // Pulsing ring around source (slower)
+      setWindOffset((prev) => (prev >= 100 ? 0 : prev + 0.3)); // Wind arrow movement (much slower)
     }, 50);
     return () => clearInterval(int);
   }, []);
@@ -95,27 +131,33 @@ const PollutionSpread = () => {
   };
 
   const handleUseGps = () => {
-    setManualLocation(null);
-    setSimulationStep(0);
-    setSpreadRadius(0);
-    setIsRunning(false);
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        setManualLocation({ lat: coords.latitude, lng: coords.longitude });
+        refresh(coords.latitude, coords.longitude);
+        setSimulationStep(0);
+        setSpreadRadius(0);
+        if (intervalRef.current) clearInterval(intervalRef.current);
+        setIsRunning(false);
+      },
+      (err) => console.error("GPS error", err),
+      { enableHighAccuracy: true, timeout: 5000 }
+    );
   };
-
-  // Wind metrics from data hook
-  const windDirDeg = data?.weather?.windDirection ?? 90;
-  const windSpeed   = data?.weather?.windSpeed ?? 10;
-  const currentAqi  = data?.currentAqi ?? 50;
 
   // Calculate spread movement
   const spreadCenter = useMemo(() => {
     if (!location) return null;
-    // Scale factor for how much the center moves per step
-    const latOffset = -Math.cos((windDirDeg * Math.PI) / 180) * 0.0003; 
-    const lngOffset = -Math.sin((windDirDeg * Math.PI) / 180) * 0.0003;
+    
+    // Cap the drift at a small number of steps so it stays anchored close to the source
+    const driftStep = Math.min(simulationStep, 35); 
+    const latOffset = -Math.cos((windDirDeg * Math.PI) / 180) * 0.00015; 
+    const lngOffset = -Math.sin((windDirDeg * Math.PI) / 180) * 0.00015;
 
     return {
-      lat: location.lat + (latOffset * simulationStep),
-      lng: location.lng + (lngOffset * simulationStep),
+      lat: location.lat + (latOffset * driftStep),
+      lng: location.lng + (lngOffset * driftStep),
     };
   }, [location, windDirDeg, simulationStep]);
 
@@ -165,16 +207,21 @@ const PollutionSpread = () => {
     setSimulationStep(0);
     
     let step = 0;
-    const interval = setInterval(() => {
+    intervalRef.current = setInterval(() => {
       step += 1;
-      setSpreadRadius(prev => prev + 50 + (windSpeed * 0.5)); // Radius expands faster with high wind speed
+      setSpreadRadius(prev => prev + 20 + (windSpeed * 0.4)); // Expands faster over more steps
       setSimulationStep(step);
       
-      if (step >= 80) { // 80 steps simulation
-        clearInterval(interval);
+      if (step >= 150) { // 150 steps simulation for a much broader footprint
+        if (intervalRef.current) clearInterval(intervalRef.current);
         setIsRunning(false);
       }
-    }, 50);
+    }, 60);
+  };
+
+  const handleStop = () => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    setIsRunning(false);
   };
 
   const getMarkerColor = (aqi: number) => {
@@ -229,9 +276,15 @@ const PollutionSpread = () => {
               </div>
             </div>
 
-            <Button className="rounded-full px-6 shadow-glow" onClick={handleRun} disabled={isRunning || dataLoading || !location}>
-              {isRunning ? "Simulating..." : "Run Simulator"}
-            </Button>
+            {isRunning ? (
+              <Button variant="destructive" className="rounded-full px-6 shadow-glow animate-pulse" onClick={handleStop}>
+                <Square className="h-4 w-4 mr-2" /> Stop Simulation
+              </Button>
+            ) : (
+              <Button className="rounded-full px-6 shadow-glow" onClick={handleRun} disabled={dataLoading || !location}>
+                Run Simulator
+              </Button>
+            )}
           </div>
         </div>
 
@@ -259,6 +312,7 @@ const PollutionSpread = () => {
               center={location}
               zoom={12}
               onClick={handleMapClick}
+              onLoad={setMapInstance}
               options={{
                 disableDefaultUI: false,
                 zoomControl: true,
@@ -285,13 +339,13 @@ const PollutionSpread = () => {
               {/* Pulse */}
               <Circle
                 center={location}
-                radius={pulseRadius}
+                radius={pulseRadius * 1.5}
                 options={{
                   strokeColor: spreadColor,
-                  strokeOpacity: Math.max(0, 0.5 - pulseRadius / 2000),
-                  strokeWeight: 1,
+                  strokeOpacity: Math.max(0, 0.6 - pulseRadius / 2000),
+                  strokeWeight: 1.5,
                   fillColor: spreadColor,
-                  fillOpacity: Math.max(0, 0.2 - pulseRadius / 5000),
+                  fillOpacity: Math.max(0, 0.25 - pulseRadius / 5000),
                   clickable: false,
                 }}
               />
@@ -335,13 +389,29 @@ const PollutionSpread = () => {
               {spreadRadius > 0 && spreadCenter && (
                 <Circle
                   center={spreadCenter}
-                  radius={spreadRadius * 0.4}
+                  radius={spreadRadius * 0.3}
                   options={{
                     strokeColor: spreadColor,
-                    strokeOpacity: 0.9,
+                    strokeOpacity: 0.95,
                     strokeWeight: 2,
                     fillColor: spreadColor,
-                    fillOpacity: Math.max(0.2, 0.6 - (simulationStep * 0.005)),
+                    fillOpacity: Math.max(0.2, 0.7 - (simulationStep * 0.004)),
+                    clickable: false,
+                  }}
+                />
+              )}
+
+              {/* Mid zone */}
+              {spreadRadius > 0 && spreadCenter && (
+                <Circle
+                  center={spreadCenter}
+                  radius={spreadRadius * 0.65}
+                  options={{
+                    strokeColor: spreadColor,
+                    strokeOpacity: 0.4,
+                    strokeWeight: 1.5,
+                    fillColor: spreadColor,
+                    fillOpacity: Math.max(0.1, 0.4 - (simulationStep * 0.002)),
                     clickable: false,
                   }}
                 />
@@ -354,10 +424,10 @@ const PollutionSpread = () => {
                   radius={spreadRadius}
                   options={{
                     strokeColor: spreadColor,
-                    strokeOpacity: 0.4,
+                    strokeOpacity: 0.2,
                     strokeWeight: 1,
                     fillColor: spreadColor,
-                    fillOpacity: Math.max(0.05, 0.3 - (simulationStep * 0.005)),
+                    fillOpacity: Math.max(0.05, 0.2 - (simulationStep * 0.001)),
                     clickable: false,
                   }}
                 />
@@ -413,6 +483,19 @@ const PollutionSpread = () => {
             <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Affected Zones</p>
             <p className="font-display text-2xl font-bold mt-1 text-foreground">
               {affectedAreas.length}<span className="text-sm text-muted-foreground ml-1">areas</span>
+            </p>
+          </Card>
+          <Card className="p-3 shadow-card border-none bg-accent/20">
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1"><Users className="h-3 w-3"/> Est. Population</p>
+            <p className="font-display text-2xl font-bold mt-1 text-foreground">
+              {Math.floor(Math.PI * Math.pow(spreadRadius / 1000, 2) * 5000).toLocaleString()}<span className="text-sm text-muted-foreground ml-1">ppl</span>
+            </p>
+          </Card>
+          <Card className="p-3 shadow-card border-none bg-accent/20 relative overflow-hidden">
+            <div className="absolute top-0 left-0 bottom-0 bg-primary/20 transition-all duration-75" style={{ width: `${(simulationStep / 150) * 100}%` }} />
+            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider z-10 relative">Progress</p>
+            <p className="font-display text-2xl font-bold mt-1 text-foreground z-10 relative">
+              {Math.floor((simulationStep / 150) * 100)}<span className="text-sm text-muted-foreground ml-1">%</span>
             </p>
           </Card>
         </div>

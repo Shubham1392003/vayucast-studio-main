@@ -40,7 +40,7 @@ try:
 except Exception as e:
     print(f"⚠️  Firebase init error: {e}. Firestore storage disabled.")
 
-def cleanup_old_records(hours=8):
+def cleanup_old_records(hours=24):
     """Automatically delete records older than X hours to keep storage lean."""
     if db is None: return
     try:
@@ -548,22 +548,28 @@ def predict():
 
 @app.route("/api/history", methods=["GET"])
 def history():
-    """Return the last N AQI readings from Firestore."""
+    """Retrieve the last N hours of history from Firebase."""
     limit = int(request.args.get("limit", 50))
     if db is None:
-        return jsonify({"success": False, "error": "Firestore not configured", "records": []}), 200
-
+        return jsonify({"success": False, "error": "Firebase not connected", "history": []})
+    
     try:
-        docs = (
-            db.collection("aqi_readings")
-            .order_by("timestamp", direction="DESCENDING")
-            .limit(limit)
-            .stream()
-        )
-        records = [{"id": d.id, **d.to_dict()} for d in docs]
-        return jsonify({"success": True, "records": records})
+        docs = db.collection("aqi_readings") \
+                 .order_by("timestamp", direction=firestore.Query.DESCENDING) \
+                 .limit(limit) \
+                 .stream()
+        
+        history_list = []
+        for doc in docs:
+            history_list.append(doc.to_dict())
+            
+        return jsonify({
+            "success": True, 
+            "history": history_list[::-1], # Return chronological
+            "count": len(history_list)
+        }) 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e), "records": []}), 500
+        return jsonify({"success": False, "error": str(e), "history": []})
 
 
 @app.route("/api/health", methods=["GET"])

@@ -22,15 +22,30 @@ const PredictionIntelligence = () => {
   const fetchHistory = async () => {
     setHistoryLoading(true);
     try {
-      const res = await fetch(`${ML_BACKEND_URL}/api/history`);
+      const res = await fetch(`${ML_BACKEND_URL}/api/history?limit=200`);
       const json = await res.json();
-      if (json.success) {
-        setHistory(json.history.map((h: any) => ({
-          ...h,
-          time: new Date(h.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          actual: h.currentAqi,
-          predicted: h.predictedAqi
-        })));
+      if (json.success && Array.isArray(json.history)) {
+        // Use a Map to store unique hourly records (keep latest for each hour)
+        const hourlyMap = new Map();
+        
+        json.history.forEach((h: any) => {
+          const date = new Date(h.timestamp);
+          // Zero out minutes/seconds to create an hourly key
+          date.setMinutes(0, 0, 0);
+          const hourKey = date.toISOString();
+          
+          // Overwrite with newer records so each hour represents the latest state
+          hourlyMap.set(hourKey, {
+            ...h,
+            time: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            actual: h.currentAqi,
+            predicted: h.predictedAqi
+          });
+        });
+
+        // Convert Map back to array and ensure chronological order
+        const aggregatedHistory = Array.from(hourlyMap.values());
+        setHistory(aggregatedHistory);
       }
     } catch (e) {
       console.error("History fetch error:", e);
@@ -182,11 +197,12 @@ const PredictionIntelligence = () => {
             <div className="flex items-center gap-2">
               <Activity className="h-4 w-4 text-primary" />
               <h3 className="font-display text-sm font-bold text-foreground sm:text-base">
-                Performance Audit: Actual vs Forecasted
+                Performance Intelligence: Actual vs Forecasted
               </h3>
             </div>
-            <div className="flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1 text-[10px] font-semibold text-muted-foreground">
-              8h Archive
+            <div className="flex items-center gap-1.5 rounded-full bg-secondary px-3 py-1 text-[10px] font-bold text-muted-foreground">
+              <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse mr-1" />
+              Live Hourly Analysis
               {historyLoading && <RefreshCcw className="h-2.5 w-2.5 animate-spin ml-1" />}
             </div>
           </div>
@@ -194,36 +210,55 @@ const PredictionIntelligence = () => {
           <div className="h-[280px] w-full sm:h-[320px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={history.length > 0 ? history : []} margin={{ top: 5, right: 30, left: -20, bottom: 5 }}>
+                <defs>
+                  <linearGradient id="colorActual" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="hsl(0,0%,20%)" stopOpacity={0.1}/>
+                    <stop offset="95%" stopColor="hsl(0,0%,20%)" stopOpacity={0}/>
+                  </linearGradient>
+                  <linearGradient id="colorPredicted" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="hsl(130,50%,32%)" stopOpacity={0.1}/>
+                    <stop offset="95%" stopColor="hsl(130,50%,32%)" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
                 <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="hsl(130,15%,92%)" />
                 <XAxis 
                   dataKey="time" 
-                  tick={{ fontSize: 10, fontWeight: 500 }} 
+                  tick={{ fontSize: 10, fontWeight: 600, fill: "hsl(var(--muted-foreground))" }} 
                   axisLine={false}
                   tickLine={false}
                   dy={10}
                 />
                 <YAxis 
-                  tick={{ fontSize: 10, fontWeight: 500 }} 
+                  tick={{ fontSize: 10, fontWeight: 600, fill: "hsl(var(--muted-foreground))" }} 
                   axisLine={false}
                   tickLine={false}
                 />
                 <Tooltip
                   contentStyle={{ 
-                    borderRadius: '12px', 
+                    borderRadius: '16px', 
                     border: 'none', 
-                    boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)',
+                    boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)',
                     fontSize: '11px',
-                    fontWeight: 600
+                    fontWeight: 700,
+                    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                    backdropFilter: 'blur(8px)'
                   }}
-                  formatter={(val: number, name: string) => [val, name === "actual" ? "Recorded" : "AI Forecast"]}
+                  itemStyle={{ padding: '2px 0' }}
+                  formatter={(val: number, name: string) => [val, name === "actual" ? "Recorded AQI" : "AI Forecast"]}
                 />
-                <Legend iconType="circle" wrapperStyle={{ paddingTop: 20, fontSize: 11, fontWeight: 500 }} />
+                <Legend 
+                  iconType="circle" 
+                  wrapperStyle={{ paddingTop: 20, fontSize: 11, fontWeight: 700 }} 
+                  verticalAlign="bottom"
+                  align="center"
+                />
                 <Line 
-                  type="stepAfter" 
+                  type="monotone" 
                   dataKey="actual" 
                   stroke="hsl(0,0%,20%)" 
-                  strokeWidth={3} 
-                  dot={{ r: 4, strokeWidth: 2, fill: 'white' }} 
+                  strokeWidth={4} 
+                  dot={{ r: 4, strokeWidth: 2, fill: 'white', stroke: 'hsl(0,0%,20%)' }} 
+                  activeDot={{ r: 6, strokeWidth: 0 }}
                   name="Recorded AQI" 
                   animationDuration={1500}
                 />
@@ -231,10 +266,11 @@ const PredictionIntelligence = () => {
                   type="monotone" 
                   dataKey="predicted" 
                   stroke="hsl(130,50%,32%)" 
-                  strokeWidth={3} 
-                  dot={{ r: 4, strokeWidth: 2, fill: 'white' }} 
+                  strokeWidth={4} 
+                  strokeDasharray="10 6"
+                  dot={{ r: 4, strokeWidth: 2, fill: 'white', stroke: 'hsl(130,50%,32%)' }} 
+                  activeDot={{ r: 6, strokeWidth: 0 }}
                   name="AI Forecast" 
-                  strokeDasharray="8 5"
                   animationDuration={2000}
                 />
               </LineChart>
@@ -243,9 +279,12 @@ const PredictionIntelligence = () => {
           
           {!historyLoading && history.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center bg-card/80 backdrop-blur-sm">
-              <p className="text-xs font-medium text-muted-foreground italic">
-                Gathering historical performance logs... (awaiting next 15m cycle)
-              </p>
+              <div className="flex flex-col items-center gap-2">
+                <RefreshCcw className="h-5 w-5 animate-spin text-muted-foreground" />
+                <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">
+                  Syncing Performance Logs...
+                </p>
+              </div>
             </div>
           )}
         </Card>
@@ -311,6 +350,83 @@ const PredictionIntelligence = () => {
           </Card>
         </div>
       </div>
+
+      {/* ── 12-Hour Precision Log ────────────────────────────────────────────── */}
+      <Card className="overflow-hidden rounded-2xl border-none bg-card p-0 shadow-card animate-in slide-in-from-bottom-4 duration-700">
+        <div className="flex items-center justify-between border-b border-border/50 bg-secondary/30 px-6 py-4">
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-primary" />
+            <h3 className="font-display text-xs font-bold uppercase tracking-widest text-muted-foreground sm:text-sm">
+              12-Hour Precision Log
+            </h3>
+          </div>
+          <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
+            Audit Archive
+          </div>
+        </div>
+        
+        <div className="overflow-x-auto">
+          <table className="w-full text-left">
+            <thead>
+              <tr className="border-b border-border/50 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                <th className="px-6 py-3">Time Window</th>
+                <th className="px-6 py-3 text-center">Observed (AQI)</th>
+                <th className="px-6 py-3 text-center">AI Forecast (AQI)</th>
+                <th className="px-6 py-3 text-right">Variance</th>
+                <th className="px-6 py-3 text-right">Reliability Index</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50">
+              {history.slice(-12).reverse().map((h, i) => {
+                const diff = Math.abs(h.actual - h.predicted);
+                const accuracy = Math.max(0, 100 - (diff / (h.actual || 1) * 100));
+                
+                return (
+                  <tr key={i} className="group transition-all hover:bg-secondary/20">
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-2 font-display text-sm font-bold text-foreground">
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary/40 group-hover:animate-pulse" />
+                        {h.time}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-center">
+                      <span className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold ${h.actual > 150 ? "bg-destructive/10 text-destructive" : "bg-success/10 text-success"}`}>
+                        {h.actual}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-center font-display text-sm font-bold text-muted-foreground">
+                      {h.predicted}
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <span className={`text-xs font-bold ${diff <= 5 ? "text-success" : diff <= 15 ? "text-warning" : "text-destructive"}`}>
+                        {diff > 0 ? `±${diff}` : "Perfect Sync"}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <div className="flex flex-col items-end">
+                        <span className="text-xs font-black text-foreground">{Math.floor(accuracy)}%</span>
+                        <div className="mt-1 h-1 w-20 overflow-hidden rounded-full bg-secondary">
+                          <div 
+                            className="h-full bg-primary transition-all duration-1000" 
+                            style={{ width: `${accuracy}%` }} 
+                          />
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {history.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="py-12 text-center text-xs font-medium italic text-muted-foreground">
+                    Compiling latest audit logs... (expected in ~15m)
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
     </div>
   );
 };

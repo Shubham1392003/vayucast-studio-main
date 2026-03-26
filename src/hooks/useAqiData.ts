@@ -56,6 +56,7 @@ export interface AqiPayload {
   currentPm10: number;
 
   weather: WeatherInfo;
+  trafficDensity: number;
   exposure: ExposureInfo;
   windImpact: WindImpact;
   factors: Factor[];

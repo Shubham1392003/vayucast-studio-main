@@ -59,19 +59,35 @@ const AirQualityMap = () => {
     );
   }, []);
 
-  const junctionPositions = useMemo(() => ({
-    user:      { lat: location.lat,         lng: location.lon },
-    junctionA: { lat: location.lat + 0.01,  lng: location.lon + 0.01 },
-    junctionB: { lat: location.lat - 0.012, lng: location.lon + 0.008 },
-  }), [location]);
+  const junctions = useMemo(() => {
+    const names = [
+      "City Center Junction", "Northern Bypass", "Industrial Sector", 
+      "Residential Cross", "Old Town Square", "Station Road", 
+      "Tech Park Entry", "Green Belt Terminal"
+    ];
+    
+    return Array.from({ length: 8 }).map((_, i) => {
+      // Create a stable deterministic-ish offset based on the index
+      const angle = (i * 2 * Math.PI) / 8;
+      const radius = 0.015 + (i % 3) * 0.005;
+      const lat = location.lat + Math.cos(angle) * radius;
+      const lng = location.lon + Math.sin(angle) * radius;
+      
+      // Derive AQI with some variation from center
+      const baseAqi = data?.currentAqi ?? 85;
+      const variation = (i % 2 === 0 ? 1 : -1) * (10 + (i * 5));
+      const junctionAqi = Math.max(10, baseAqi + variation);
 
-  // Derived AQI values for junction markers (estimated ± current)
-  const junctionA = data ? Math.max(0, data.currentAqi + (data.windImpact?.sectorAqiDelta ?? 8))  : 92;
-  const junctionB = data ? Math.max(0, data.currentAqi - (data.windImpact?.zoneAqiDelta  ?? 12)) : 68;
-
-  const currentAqi  = data?.currentAqi  ?? 85;
-  const predictedAqi = data?.predictedAqi ?? 80;
-  const confidence   = data?.confidence  ?? 0;
+      return {
+        id: `junction-${i}`,
+        name: names[i] || `Junction ${i + 1}`,
+        position: { lat, lng },
+        aqi: junctionAqi,
+        category: getAqiCategory(junctionAqi),
+        color: getMarkerColor(junctionAqi)
+      };
+    });
+  }, [location, data?.currentAqi]);
 
   const handleLocateMe = () => {
     if (!navigator.geolocation) return;
@@ -83,13 +99,16 @@ const AirQualityMap = () => {
         refresh(newPos.lat, newPos.lon);
       },
       () => {
-        // Fallback to default if GPS fails
         setLocation(DEFAULT_LOCATION);
         refresh(DEFAULT_LOCATION.lat, DEFAULT_LOCATION.lon);
       },
       { enableHighAccuracy: true, timeout: 5000 }
     );
   };
+
+  const currentAqi   = data?.currentAqi   ?? 85;
+  const predictedAqi = data?.predictedAqi ?? 80;
+  const confidence   = data?.confidence   ?? 0;
 
   if (loadError) {
     return (
@@ -110,8 +129,8 @@ const AirQualityMap = () => {
       {/* ── Map Area ─────────────────────────────────────────────────────── */}
       <div className="relative min-h-[320px] flex-1 bg-secondary/20 sm:min-h-[420px]">
         {/* Map Hint / Reset */}
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2">
-           <div className="rounded-full bg-card/90 px-4 py-1.5 text-xs text-muted-foreground shadow-card backdrop-blur-sm border border-border/50">
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-4 w-full justify-center">
+           <div className="rounded-full bg-card/90 px-4 py-1.5 text-[10px] sm:text-xs text-muted-foreground shadow-card backdrop-blur-sm border border-border/50 truncate max-w-[200px] sm:max-w-none">
              <MapPin className="h-3 w-3 inline mr-1 text-primary" />
              {manualLocation ? "Custom Location Active" : "Click map to explore AQI"}
            </div>
@@ -119,7 +138,7 @@ const AirQualityMap = () => {
            <Button
               variant={manualLocation ? "default" : "outline"}
               size="sm"
-              className="h-8 rounded-full shadow-card bg-card/95 border-primary/20 hover:bg-primary/5 text-foreground"
+              className="h-8 rounded-full shadow-card bg-card/95 border-primary/20 hover:bg-primary/5 text-foreground hidden sm:flex"
               onClick={handleLocateMe}
               title="Go to my live GPS location"
            >
@@ -164,80 +183,71 @@ const AirQualityMap = () => {
           >
             {/* User location marker */}
             <Marker
-              position={junctionPositions.user}
+              position={{ lat: location.lat, lng: location.lon }}
               title="Your Current Location"
               onClick={() => setSelectedMarker("user")}
             />
-            <Marker
-              position={junctionPositions.junctionA}
-              title="Junction A – City Center"
-              icon={getMarkerColor(junctionA)}
-              onClick={() => setSelectedMarker("junctionA")}
-            />
-            <Marker
-              position={junctionPositions.junctionB}
-              title="Junction B – Northern Outskirts"
-              icon={getMarkerColor(junctionB)}
-              onClick={() => setSelectedMarker("junctionB")}
-            />
+
+            {/* Junction markers */}
+            {junctions.map((j) => (
+              <Marker
+                key={j.id}
+                position={j.position}
+                title={j.name}
+                icon={j.color}
+                onClick={() => setSelectedMarker(j.id)}
+              />
+            ))}
 
             {selectedMarker === "user" && (
-              <InfoWindow position={junctionPositions.user} onCloseClick={() => setSelectedMarker(null)}>
+              <InfoWindow 
+                position={{ lat: location.lat, lng: location.lon }} 
+                onCloseClick={() => setSelectedMarker(null)}
+              >
                 <div className="p-1">
-                  <h4 className="font-bold">Current Location</h4>
-                  <p>AQI: {currentAqi}</p>
-                  <p>Status: {getAqiCategory(currentAqi)}</p>
-                  {data?.weather && <p>Temp: {data.weather.temperature}°C · Wind: {data.weather.windSpeed} km/h</p>}
+                  <h4 className="font-bold">Focus Point</h4>
+                  <p className="text-sm">AQI: {currentAqi}</p>
+                  <p className="text-sm font-medium">{getAqiCategory(currentAqi)}</p>
+                  {data?.weather && <p className="text-[10px] mt-1 opacity-70">Temp: {data.weather.temperature}°C · {data.weather.windSpeed} km/h</p>}
                 </div>
               </InfoWindow>
             )}
-            {selectedMarker === "junctionA" && (
-              <InfoWindow position={junctionPositions.junctionA} onCloseClick={() => setSelectedMarker(null)}>
+
+            {junctions.map((j) => selectedMarker === j.id && (
+              <InfoWindow 
+                key={`info-${j.id}`}
+                position={j.position} 
+                onCloseClick={() => setSelectedMarker(null)}
+              >
                 <div className="p-1">
-                  <h4 className="font-bold">Junction A – City Center</h4>
-                  <p>AQI: {junctionA}</p>
-                  <p>Status: {getAqiCategory(junctionA)}</p>
+                  <h4 className="font-bold">{j.name}</h4>
+                  <p className="text-sm">AQI: {j.aqi}</p>
+                  <p className="text-sm font-medium">{j.category}</p>
                 </div>
               </InfoWindow>
-            )}
-            {selectedMarker === "junctionB" && (
-              <InfoWindow position={junctionPositions.junctionB} onCloseClick={() => setSelectedMarker(null)}>
-                <div className="p-1">
-                  <h4 className="font-bold">Junction B – Northern Outskirts</h4>
-                  <p>AQI: {junctionB}</p>
-                  <p>Status: {getAqiCategory(junctionB)}</p>
-                </div>
-              </InfoWindow>
-            )}
+            ))}
           </GoogleMap>
         )}
 
-        {/* Floating overlay – Junction A */}
-        <div className="absolute bottom-4 left-4 rounded-xl bg-card/95 p-3 shadow-card backdrop-blur">
-          <p className="text-xs text-muted-foreground">Junction A – City Center</p>
-          <div className="mt-1 flex items-center gap-3">
-            <div>
-              <span className="text-xs text-muted-foreground">AQI</span>
-              <p className="font-display text-2xl font-bold text-foreground">{junctionA}</p>
+        {/* Dynamic Floating Overlays for Top 2 Junctions */}
+        <div className="absolute bottom-4 left-4 right-4 flex flex-col sm:flex-row gap-3 pointer-events-none">
+          {junctions.slice(0, 2).map((j, idx) => (
+            <div 
+              key={idx} 
+              className={`rounded-xl bg-card/95 p-3 shadow-card backdrop-blur border border-border/50 animate-in fade-in slide-in-from-bottom-2 duration-500 pointer-events-auto ${idx > 0 ? "hidden md:block" : ""}`}
+            >
+              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{j.name}</p>
+              <div className="mt-1 flex items-center gap-3">
+                <div>
+                  <span className="text-[10px] text-muted-foreground">Current AQI</span>
+                  <p className={`font-display text-2xl font-bold ${getAqiColorClass(j.aqi)}`}>{j.aqi}</p>
+                </div>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${getAqiColorClass(j.aqi, true)}`}>
+                  {j.category}
+                </span>
+              </div>
             </div>
-            <span className={`rounded-full px-3 py-1 text-xs font-bold ${getAqiColorClass(junctionA, true)}`}>
-              {getAqiCategory(junctionA)}
-            </span>
-          </div>
-        </div>
-
-        {/* Floating overlay – Junction B */}
-        <div className="absolute right-4 top-4 rounded-xl bg-card/95 p-3 shadow-card backdrop-blur">
-          <p className="text-xs text-muted-foreground">Junction B – Northern Outskirts</p>
-          <div className="mt-1 flex items-center gap-3">
-            <div>
-              <span className="text-xs text-muted-foreground">AQI</span>
-              <p className="font-display text-2xl font-bold text-foreground">{junctionB}</p>
-            </div>
-            <span className={`rounded-full px-3 py-1 text-xs font-bold ${getAqiColorClass(junctionB, true)}`}>
-              {getAqiCategory(junctionB)}
-            </span>
-          </div>
+          ))}
         </div>
 
         {loading && (

@@ -1,5 +1,6 @@
 import { Card } from "@/components/ui/card";
-import { ArrowUp, ArrowDown, Activity, RefreshCcw, Wind, MapPin, Wifi, WifiOff } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ArrowUp, ArrowDown, Activity, RefreshCcw, Wind, MapPin, Wifi, WifiOff, Crosshair } from "lucide-react";
 import airQualityIllustration from "@/assets/air-quality-illustration.png";
 import { useEffect, useMemo, useState } from "react";
 import { GoogleMap, Marker, InfoWindow, useJsApiLoader } from "@react-google-maps/api";
@@ -37,6 +38,7 @@ const getMarkerColor = (aqi: number) => {
 /* ── Component ───────────────────────────────────────────────────────────── */
 const AirQualityMap = () => {
   const [location, setLocation] = useState(DEFAULT_LOCATION);
+  const [manualLocation, setManualLocation] = useState(false);
   const [selectedMarker, setSelectedMarker] = useState<string | null>(null);
   const [mapLoading, setMapLoading] = useState(true);
 
@@ -71,6 +73,24 @@ const AirQualityMap = () => {
   const predictedAqi = data?.predictedAqi ?? 80;
   const confidence   = data?.confidence  ?? 0;
 
+  const handleLocateMe = () => {
+    if (!navigator.geolocation) return;
+    setManualLocation(true);
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        const newPos = { lat: coords.latitude, lon: coords.longitude };
+        setLocation(newPos);
+        refresh(newPos.lat, newPos.lon);
+      },
+      () => {
+        // Fallback to default if GPS fails
+        setLocation(DEFAULT_LOCATION);
+        refresh(DEFAULT_LOCATION.lat, DEFAULT_LOCATION.lon);
+      },
+      { enableHighAccuracy: true, timeout: 5000 }
+    );
+  };
+
   if (loadError) {
     return (
       <div className="flex h-full min-h-[400px] flex-col items-center justify-center gap-4">
@@ -89,6 +109,25 @@ const AirQualityMap = () => {
     <div className="flex h-full flex-col gap-0 overflow-hidden rounded-2xl lg:flex-row">
       {/* ── Map Area ─────────────────────────────────────────────────────── */}
       <div className="relative min-h-[320px] flex-1 bg-secondary/20 sm:min-h-[420px]">
+        {/* Map Hint / Reset */}
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2">
+           <div className="rounded-full bg-card/90 px-4 py-1.5 text-xs text-muted-foreground shadow-card backdrop-blur-sm border border-border/50">
+             <MapPin className="h-3 w-3 inline mr-1 text-primary" />
+             {manualLocation ? "Custom Location Active" : "Click map to explore AQI"}
+           </div>
+           
+           <Button
+              variant={manualLocation ? "default" : "outline"}
+              size="sm"
+              className="h-8 rounded-full shadow-card bg-card/95 border-primary/20 hover:bg-primary/5 text-foreground"
+              onClick={handleLocateMe}
+              title="Go to my live GPS location"
+           >
+             <Crosshair className={`h-3 w-3 mr-1 ${manualLocation ? "text-primary-foreground" : "text-primary"}`} />
+             {manualLocation ? "Reset to GPS" : "Locate Me"}
+           </Button>
+        </div>
+
         {(!isLoaded || mapLoading) && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 backdrop-blur-sm">
             <div className="flex flex-col items-center gap-2">
@@ -104,6 +143,15 @@ const AirQualityMap = () => {
             center={{ lat: location.lat, lng: location.lon }}
             zoom={13}
             onLoad={() => setMapLoading(false)}
+            onClick={(e) => {
+              if (e.latLng) {
+                const lat = e.latLng.lat();
+                const lon = e.latLng.lng();
+                setLocation({ lat, lon });
+                setManualLocation(true);
+                refresh(lat, lon);
+              }
+            }}
             options={{
               disableDefaultUI: false,
               zoomControl: true,
@@ -205,12 +253,12 @@ const AirQualityMap = () => {
         <div className="absolute right-3 top-3 flex items-center gap-2">
           {/* Backend connectivity indicator */}
           {data ? (
-            <Wifi className="h-3 w-3 text-success" title={`Source: ${data.source}`} />
+            <Wifi className="h-3 w-3 text-success" />
           ) : (
             <WifiOff className="h-3 w-3 text-muted-foreground" />
           )}
           <button
-            onClick={refresh}
+            onClick={() => refresh()}
             className="rounded-lg bg-secondary p-2 text-secondary-foreground hover:bg-secondary/80"
             title="Refresh ML Prediction"
           >

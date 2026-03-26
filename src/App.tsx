@@ -16,6 +16,7 @@ import AqiTrends from "./pages/dashboard/AqiTrends";
 import NotFound from "./pages/NotFound";
 import ContactUs from "./pages/ContactUs";
 import AboutUs from "./pages/AboutUs";
+import PollutionPrevention from "./pages/PollutionPrevention";
 
 const queryClient = new QueryClient();
 
@@ -31,6 +32,7 @@ const App = () => (
           <Route path="/signup" element={<Signup />} />
           <Route path="/contact" element={<ContactUs />} />
           <Route path="/about" element={<AboutUs />} />
+          <Route path="/product" element={<PollutionPrevention />} />
           <Route path="/dashboard" element={<DashboardLayout />}>
             <Route index element={<AirQualityMap />} />
             <Route path="predictions" element={<PredictionIntelligence />} />

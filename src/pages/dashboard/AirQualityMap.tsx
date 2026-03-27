@@ -1,6 +1,6 @@
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowUp, ArrowDown, Activity, RefreshCcw, Wind, MapPin, Wifi, WifiOff, Crosshair } from "lucide-react";
+import { ArrowUp, ArrowDown, Activity, RefreshCcw, Wind, MapPin, Wifi, WifiOff, Crosshair, Database, GraduationCap, School, Hospital } from "lucide-react";
 import airQualityIllustration from "@/assets/air-quality-illustration.png";
 import { useEffect, useMemo, useState } from "react";
 import { GoogleMap, Marker, InfoWindow, useJsApiLoader } from "@react-google-maps/api";
@@ -41,13 +41,23 @@ const AirQualityMap = () => {
   const [manualLocation, setManualLocation] = useState(false);
   const [selectedMarker, setSelectedMarker] = useState<string | null>(null);
   const [mapLoading, setMapLoading] = useState(true);
+  const [historyMarkers, setHistoryMarkers] = useState<any[]>([]);
+  const [sensitiveMarkers, setSensitiveMarkers] = useState<any[]>([]);
+  const [mapInstance, setMapInstance] = useState<google.maps.Map | null>(null);
 
   const { data, loading, error, lastUpdated, refresh } = useAqiData(location.lat, location.lon);
 
   const { isLoaded, loadError } = useJsApiLoader({
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "",
     id: "google-map-script",
+    libraries: ["places"]
   });
+
+  const ML_BACKEND_URL = import.meta.env.VITE_ML_BACKEND_URL || "http://localhost:5000";
+
+  const currentAqi = data?.currentAqi ?? 85;
+  const predictedAqi = data?.predictedAqi ?? 80;
+  const confidence = data?.confidence ?? 0;
 
   // Geolocation on mount
   useEffect(() => {
@@ -59,35 +69,71 @@ const AirQualityMap = () => {
     );
   }, []);
 
-  const junctions = useMemo(() => {
-    const names = [
-      "City Center Junction", "Northern Bypass", "Industrial Sector",
-      "Residential Cross", "Old Town Square", "Station Road",
-      "Tech Park Entry", "Green Belt Terminal"
-    ];
+  // Fetch real historical points near the selected location
+  useEffect(() => {
+    const fetchHistoryPoints = async () => {
+      try {
+        const res = await fetch(`${ML_BACKEND_URL}/api/history?lat=${location.lat}&lon=${location.lon}&limit=15`);
+        const json = await res.json();
+        if (json.success && Array.isArray(json.history)) {
+          const markers = json.history.map((h: any, i: number) => ({
+            id: `history-${i}`,
+            name: `Recorded reading at ${new Date(h.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+            position: { lat: h.lat, lng: h.lon },
+            aqi: h.currentAqi,
+            category: getAqiCategory(h.currentAqi),
+            color: getMarkerColor(h.currentAqi),
+            timestamp: h.timestamp
+          }));
+          setHistoryMarkers(markers);
+        }
+      } catch (err) {
+        console.error("Failed to fetch history markers:", err);
+      }
+    };
 
-    return Array.from({ length: 8 }).map((_, i) => {
-      // Create a stable deterministic-ish offset based on the index
-      const angle = (i * 2 * Math.PI) / 8;
-      const radius = 0.015 + (i % 3) * 0.005;
-      const lat = location.lat + Math.cos(angle) * radius;
-      const lng = location.lon + Math.sin(angle) * radius;
+    fetchHistoryPoints();
+  }, [location, lastUpdated, ML_BACKEND_URL]);
 
-      // Derive AQI with some variation from center
-      const baseAqi = data?.currentAqi ?? 85;
-      const variation = (i % 2 === 0 ? 1 : -1) * (10 + (i * 5));
-      const junctionAqi = Math.max(10, baseAqi + variation);
+  // Fetch real sensitive points (hospitals, schools, etc.) near the selected location
+  useEffect(() => {
+    if (!mapInstance || !location || !isLoaded) return;
 
-      return {
-        id: `junction-${i}`,
-        name: names[i] || `Junction ${i + 1}`,
-        position: { lat, lng },
-        aqi: junctionAqi,
-        category: getAqiCategory(junctionAqi),
-        color: getMarkerColor(junctionAqi)
-      };
+    const service = new google.maps.places.PlacesService(mapInstance);
+    const types = ["hospital", "school", "university"];
+    
+    // We'll perform a combined search or multiple searches. For simplicity, just one nearbySearch with a generic type or multiple.
+    // Multiple searches are better for precision.
+    let discovery: any[] = [];
+    
+    const performSearch = (type: string) => {
+      return new Promise<void>((resolve) => {
+        service.nearbySearch({
+          location: { lat: location.lat, lng: location.lon },
+          radius: 3000,
+          type: type
+        }, (results, status) => {
+          if (status === google.maps.places.PlacesServiceStatus.OK && results) {
+            const capped = results.slice(0, 2).map(p => ({
+              id: p.place_id,
+              name: p.name,
+              position: { lat: p.geometry?.location?.lat(), lng: p.geometry?.location?.lng() },
+              type: type,
+              aqi: currentAqi + (Math.random() > 0.5 ? 5 : -5), // Estimated AQI at receptor
+            }));
+            discovery = [...discovery, ...capped];
+          }
+          resolve();
+        });
+      });
+    };
+
+    Promise.all(types.map(t => performSearch(t))).then(() => {
+      // Limit to 4-5 total to avoid clutter
+      setSensitiveMarkers(discovery.slice(0, 5));
     });
-  }, [location, data?.currentAqi]);
+
+  }, [location, mapInstance, isLoaded, currentAqi]);
 
   const handleLocateMe = () => {
     if (!navigator.geolocation) return;
@@ -106,9 +152,6 @@ const AirQualityMap = () => {
     );
   };
 
-  const currentAqi = data?.currentAqi ?? 85;
-  const predictedAqi = data?.predictedAqi ?? 80;
-  const confidence = data?.confidence ?? 0;
 
   if (loadError) {
     return (
@@ -161,7 +204,10 @@ const AirQualityMap = () => {
             mapContainerStyle={mapContainerStyle}
             center={{ lat: location.lat, lng: location.lon }}
             zoom={13}
-            onLoad={() => setMapLoading(false)}
+            onLoad={(map) => {
+              setMapInstance(map);
+              setMapLoading(false);
+            }}
             onClick={(e) => {
               if (e.latLng) {
                 const lat = e.latLng.lat();
@@ -188,8 +234,23 @@ const AirQualityMap = () => {
               onClick={() => setSelectedMarker("user")}
             />
 
-            {/* Junction markers */}
-            {junctions.map((j) => (
+            {/* Sensitive Receptor markers */}
+            {sensitiveMarkers.map((j) => (
+              <Marker
+                key={j.id}
+                position={j.position}
+                title={j.name}
+                icon={{
+                  url: j.type === "hospital" 
+                    ? "http://maps.google.com/mapfiles/ms/icons/blue-dot.png" 
+                    : "http://maps.google.com/mapfiles/ms/icons/purple-dot.png",
+                }}
+                onClick={() => setSelectedMarker(j.id)}
+              />
+            ))}
+
+            {/* History markers */}
+            {historyMarkers.map((j) => (
               <Marker
                 key={j.id}
                 position={j.position}
@@ -213,33 +274,61 @@ const AirQualityMap = () => {
               </InfoWindow>
             )}
 
-            {junctions.map((j) => selectedMarker === j.id && (
+            {sensitiveMarkers.map((j) => selectedMarker === j.id && (
               <InfoWindow
                 key={`info-${j.id}`}
                 position={j.position}
                 onCloseClick={() => setSelectedMarker(null)}
               >
-                <div className="p-1">
-                  <h4 className="font-bold">{j.name}</h4>
-                  <p className="text-sm">AQI: {j.aqi}</p>
-                  <p className="text-sm font-medium">{j.category}</p>
+                <div className="p-1 min-w-[150px]">
+                  <div className="flex items-center gap-2 mb-1">
+                    {j.type === "hospital" ? <Hospital className="h-4 w-4 text-primary" /> : <GraduationCap className="h-4 w-4 text-purple-500" />}
+                    <h4 className="font-bold text-sm text-foreground">Sensitive Receptor</h4>
+                  </div>
+                  <p className="text-[11px] font-bold text-foreground">{j.name}</p>
+                  <p className="text-[10px] text-muted-foreground capitalize">{j.type} Zone</p>
+                  <div className="flex items-center justify-between mt-2 pt-1 border-t border-border/50">
+                    <span className="text-xs">Est. AQI: <span className={`font-bold ${getAqiColorClass(j.aqi)}`}>{j.aqi}</span></span>
+                    <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${getAqiColorClass(j.aqi, true)}`}>{getAqiCategory(j.aqi)}</span>
+                  </div>
+                </div>
+              </InfoWindow>
+            ))}
+
+            {historyMarkers.map((j) => selectedMarker === j.id && (
+              <InfoWindow
+                key={`info-${j.id}`}
+                position={j.position}
+                onCloseClick={() => setSelectedMarker(null)}
+              >
+                <div className="p-1 min-w-[150px]">
+                  <h4 className="font-bold text-sm text-foreground">Historical Record</h4>
+                  <p className="text-[11px] text-muted-foreground mb-1">{j.name}</p>
+                  <div className="flex items-center justify-between mt-1 pt-1 border-t border-border/50">
+                    <span className="text-xs font-medium">AQI: <span className={`font-bold ${getAqiColorClass(j.aqi)}`}>{j.aqi}</span></span>
+                    <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${getAqiColorClass(j.aqi, true)}`}>{j.category}</span>
+                  </div>
                 </div>
               </InfoWindow>
             ))}
           </GoogleMap>
         )}
 
-        {/* Dynamic Floating Overlays for Top 2 Junctions */}
+        {/* Dynamic Floating Overlays for Latest 2 Historical Readings */}
         <div className="absolute bottom-4 left-4 right-4 flex flex-col sm:flex-row gap-3 pointer-events-none">
-          {junctions.slice(0, 2).map((j, idx) => (
+          {historyMarkers.slice(0, 2).map((j, idx) => (
             <div
               key={idx}
               className={`rounded-xl bg-card/95 p-3 shadow-card backdrop-blur border border-border/50 animate-in fade-in slide-in-from-bottom-2 duration-500 pointer-events-auto ${idx > 0 ? "hidden md:block" : ""}`}
             >
-              <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{j.name}</p>
-              <div className="mt-1 flex items-center gap-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <Database className="h-2.5 w-2.5 text-primary" />
+                <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Historical Audit</p>
+              </div>
+              <p className="text-[10px] font-medium text-foreground truncate max-w-[150px]">{j.name}</p>
+              <div className="mt-1 flex items-center gap-4">
                 <div>
-                  <span className="text-[10px] text-muted-foreground">Current AQI</span>
+                  <span className="text-[9px] text-muted-foreground">Past AQI</span>
                   <p className={`font-display text-2xl font-bold ${getAqiColorClass(j.aqi)}`}>{j.aqi}</p>
                 </div>
                 <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${getAqiColorClass(j.aqi, true)}`}>

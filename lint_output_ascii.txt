@@ -1,0 +1,48 @@
+
+P:\Final_Year_project\vayucast-studio-main\src\components\ui\badge.tsx
+  29:17  warning  Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components  react-refresh/only-export-components
+
+P:\Final_Year_project\vayucast-studio-main\src\components\ui\button.tsx
+  47:18  warning  Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components  react-refresh/only-export-components
+
+P:\Final_Year_project\vayucast-studio-main\src\components\ui\command.tsx
+  24:11  error  An interface declaring no members is equivalent to its supertype  @typescript-eslint/no-empty-object-type
+
+P:\Final_Year_project\vayucast-studio-main\src\components\ui\form.tsx
+  129:10  warning  Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components  react-refresh/only-export-components
+
+P:\Final_Year_project\vayucast-studio-main\src\components\ui\navigation-menu.tsx
+  111:3  warning  Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components  react-refresh/only-export-components
+
+P:\Final_Year_project\vayucast-studio-main\src\components\ui\sidebar.tsx
+  636:3  warning  Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components  react-refresh/only-export-components
+
+P:\Final_Year_project\vayucast-studio-main\src\components\ui\sonner.tsx
+  27:19  warning  Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components  react-refresh/only-export-components
+
+P:\Final_Year_project\vayucast-studio-main\src\components\ui\textarea.tsx
+  5:18  error  An interface declaring no members is equivalent to its supertype  @typescript-eslint/no-empty-object-type
+
+P:\Final_Year_project\vayucast-studio-main\src\components\ui\toggle.tsx
+  37:18  warning  Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components  react-refresh/only-export-components
+
+P:\Final_Year_project\vayucast-studio-main\src\pages\dashboard\AirQualityMap.tsx
+   44:56  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   45:60  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   79:48  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  107:20  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+P:\Final_Year_project\vayucast-studio-main\src\pages\dashboard\AqiTrends.tsx
+  43:6  warning  React Hook useEffect has a missing dependency: 'fetchHistory'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+P:\Final_Year_project\vayucast-studio-main\src\pages\dashboard\PollutionSpread.tsx
+   65:9  warning  The 'location' logical expression could make the dependencies of useMemo Hook (at line 162) change on every render. To fix this, wrap the initialization of 'location' in its own useMemo() Hook  react-hooks/exhaustive-deps
+   65:9  warning  The 'location' logical expression could make the dependencies of useMemo Hook (at line 183) change on every render. To fix this, wrap the initialization of 'location' in its own useMemo() Hook  react-hooks/exhaustive-deps
+  115:6  warning  React Hook useEffect has missing dependencies: 'data' and 'location'. Either include them or remove the dependency array                                                                          react-hooks/exhaustive-deps
+
+P:\Final_Year_project\vayucast-studio-main\src\pages\dashboard\PredictionIntelligence.tsx
+  18:42  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  35:34  error  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+??? 19 problems (8 errors, 11 warnings)
+

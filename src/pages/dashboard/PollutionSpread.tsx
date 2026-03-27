@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { AlertTriangle, Radar, Activity, RefreshCcw, MapPin, Wind, Crosshair, Users, Square } from "lucide-react";
 import spreadIllustration from "@/assets/spread-illustration.png";
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
-import { GoogleMap, Marker, Circle, Polyline, useJsApiLoader, InfoWindow } from "@react-google-maps/api";
+import { GoogleMap, Marker, Circle, Polyline, Polygon, useJsApiLoader, InfoWindow } from "@react-google-maps/api";
 import { useAqiData } from "@/hooks/useAqiData";
 
 interface Area {
@@ -82,24 +82,8 @@ const PollutionSpread = () => {
     }, (results, status) => {
       if (status === window.google.maps.places.PlacesServiceStatus.OK && results) {
         
-        // Compute wind flow vector to filter out upwind points
-        const rad = Math.PI / 180;
-        const flowLat = -Math.cos(windDirDeg * rad);
-        const flowLng = -Math.sin(windDirDeg * rad);
-
-        const downwindResults = results.filter(place => {
-          const pLat = place.geometry?.location?.lat();
-          const pLng = place.geometry?.location?.lng();
-          if (!pLat || !pLng) return false;
-          
-          const dLat = pLat - location.lat;
-          const dLng = pLng - location.lng;
-          
-          // Dot product > 0 means the place is mostly in the downwind direction
-          return (dLat * flowLat) + (dLng * flowLng) > 0;
-        });
-
-        const validResults = downwindResults.slice(0, 10);
+        // Fetch surrounding locations to show context (not just downwind ones)
+        const validResults = results.slice(0, 15);
         const areas: Area[] = validResults.map((place, i) => ({
           id: place.place_id || `place-${i}`,
           name: place.name || "Unknown Area",
@@ -146,28 +130,44 @@ const PollutionSpread = () => {
     );
   };
 
-  // Calculate spread movement
-  const spreadCenter = useMemo(() => {
-    if (!location) return null;
-    
-    // Cap the drift at a small number of steps so it stays anchored close to the source
-    const driftStep = Math.min(simulationStep, 35); 
-    const latOffset = -Math.cos((windDirDeg * Math.PI) / 180) * 0.00015; 
-    const lngOffset = -Math.sin((windDirDeg * Math.PI) / 180) * 0.00015;
+  // Calculate wind Direction Offsets (where wind is blowing TO)
+  const windOffsets = useMemo(() => {
+    const latOffset = Math.cos((windDirDeg * Math.PI) / 180); 
+    const lngOffset = Math.sin((windDirDeg * Math.PI) / 180);
+    return { latOffset, lngOffset };
+  }, [windDirDeg]);
 
-    return {
-      lat: location.lat + (latOffset * driftStep),
-      lng: location.lng + (lngOffset * driftStep),
-    };
-  }, [location, windDirDeg, simulationStep]);
+  // Generate Plume Polygons (Wedge Cones) instead of circles
+  const createPlumeWedge = useCallback((radiusMeters: number) => {
+    if (!location || radiusMeters === 0) return [];
+    // Start at the emission source
+    const points = [{ lat: location.lat, lng: location.lng }];
+    const rDeg = radiusMeters / 111000;
+    const numSegments = 12; // Smooth arc
+    const cosLat = Math.cos(location.lat * Math.PI / 180);
+    // Draw an arc spanning from -40 to +40 degrees from the core wind direction
+    for (let i = 0; i <= numSegments; i++) {
+        const offsetAng = -40 + (80 * (i / numSegments)); 
+        const ang = (windDirDeg + offsetAng) * (Math.PI / 180);
+        points.push({
+            lat: location.lat + Math.cos(ang) * rDeg,
+            lng: location.lng + Math.sin(ang) * (rDeg / cosLat)
+        });
+    }
+    return points;
+  }, [location, windDirDeg]);
+
+  const innerPlume = useMemo(() => createPlumeWedge(spreadRadius * 0.3), [createPlumeWedge, spreadRadius]);
+  const midPlume = useMemo(() => createPlumeWedge(spreadRadius * 0.65), [createPlumeWedge, spreadRadius]);
+  const outerPlume = useMemo(() => createPlumeWedge(spreadRadius), [createPlumeWedge, spreadRadius]);
 
   // Generate wind flow lines based on live direction
   const windLines = useMemo(() => {
     if (!location) return [];
     
     const lines = [];
-    const latOffset = -Math.cos((windDirDeg * Math.PI) / 180) * 0.03; // length of wind visual line
-    const lngOffset = -Math.sin((windDirDeg * Math.PI) / 180) * 0.03;
+    const latOffset = Math.cos((windDirDeg * Math.PI) / 180) * 0.03; // length of wind visual line
+    const lngOffset = Math.sin((windDirDeg * Math.PI) / 180) * 0.03;
 
     for (let i = 0; i < 6; i++) {
       // random start position within ~0.06 radius
@@ -184,21 +184,35 @@ const PollutionSpread = () => {
 
   // Affected areas logic
   const affectedAreas = useMemo(() => {
-    if (spreadRadius === 0 || !spreadCenter) return [];
+    if (spreadRadius === 0 || !location) return [];
     
+    // Wind flow vector to check if a location is downwind/inside the plume
+    const rad = Math.PI / 180;
+    const flowLat = Math.cos(windDirDeg * rad);
+    const flowLng = Math.sin(windDirDeg * rad);
+
     return generatedAreas.map(j => {
-      const dLat = (j.lat - spreadCenter.lat) * 111000;
-      const dLng = (j.lng - spreadCenter.lng) * 111000;
-      const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+      // Accurate physical distance measurement
+      const dLatPhysical = (j.lat - location.lat) * 111000;
+      const dLngPhysical = (j.lng - location.lng) * 111000 * Math.cos(location.lat * Math.PI / 180);
+      const dist = Math.sqrt(dLatPhysical * dLatPhysical + dLngPhysical * dLngPhysical);
       
-      if (dist < spreadRadius) {
+      // Calculate dot product for cone angle checking
+      const dLatDegree = j.lat - location.lat;
+      const dLngDegree = j.lng - location.lng;
+      const dot = (dLatDegree * flowLat) + (dLngDegree * flowLng);
+      const distDegrees = Math.sqrt(dLatDegree * dLatDegree + dLngDegree * dLngDegree);
+      const isDownwind = distDegrees === 0 ? true : (dot / distDegrees) > 0.8;
+      
+      // Target must be within radius AND inside the tight downwind cone corridor
+      if (dist < spreadRadius && isDownwind) {
         // Core intensity drops over distance and increases with steps
         const intensity = Math.max(0, Math.floor(currentAqi * (1 - dist/spreadRadius) * 0.4));
         return { ...j, addedAqi: intensity };
       }
       return null;
     }).filter(Boolean) as (Area & {addedAqi: number})[];
-  }, [spreadCenter, spreadRadius, generatedAreas, currentAqi]);
+  }, [location, spreadRadius, generatedAreas, currentAqi, windDirDeg]);
 
   const handleRun = () => {
     if (isRunning || !location) return;
@@ -386,10 +400,9 @@ const PollutionSpread = () => {
               ))}
 
               {/* Inner Core */}
-              {spreadRadius > 0 && spreadCenter && (
-                <Circle
-                  center={spreadCenter}
-                  radius={spreadRadius * 0.3}
+              {spreadRadius > 0 && innerPlume.length > 0 && (
+                <Polygon
+                  paths={innerPlume}
                   options={{
                     strokeColor: spreadColor,
                     strokeOpacity: 0.95,
@@ -402,10 +415,9 @@ const PollutionSpread = () => {
               )}
 
               {/* Mid zone */}
-              {spreadRadius > 0 && spreadCenter && (
-                <Circle
-                  center={spreadCenter}
-                  radius={spreadRadius * 0.65}
+              {spreadRadius > 0 && midPlume.length > 0 && (
+                <Polygon
+                  paths={midPlume}
                   options={{
                     strokeColor: spreadColor,
                     strokeOpacity: 0.4,
@@ -418,10 +430,9 @@ const PollutionSpread = () => {
               )}
 
               {/* Outer zone */}
-              {spreadRadius > 0 && spreadCenter && (
-                <Circle
-                  center={spreadCenter}
-                  radius={spreadRadius}
+              {spreadRadius > 0 && outerPlume.length > 0 && (
+                <Polygon
+                  paths={outerPlume}
                   options={{
                     strokeColor: spreadColor,
                     strokeOpacity: 0.2,
@@ -467,58 +478,77 @@ const PollutionSpread = () => {
         </div>
       </div>
 
-      <div className="w-full relative z-10 space-y-4 overflow-y-auto border-t border-border bg-card p-4 lg:w-[320px] lg:border-l lg:border-t-0 shadow-[-10px_0_20px_-10px_rgba(0,0,0,0.1)]">
-        <div className="flex justify-center mb-6">
-          <img src={spreadIllustration} alt="Spread illustration" className="h-24 w-auto object-contain drop-shadow-xl" />
+      <div className="relative flex w-full flex-col gap-5 overflow-y-auto border-t border-border/40 bg-card/95 p-5 shadow-[-10px_0_20px_-10px_rgba(0,0,0,0.05)] backdrop-blur-xl lg:w-[360px] lg:border-l lg:border-t-0">
+        
+        {/* Header Illustration */}
+        <div className="relative mb-2 mt-2 flex justify-center">
+          <div className="absolute -inset-4 rounded-full bg-primary/5 blur-xl"></div>
+          <img src={spreadIllustration} alt="Spread illustration" className="relative z-10 h-28 w-auto object-contain drop-shadow-2xl transition-transform duration-500 hover:scale-105" />
         </div>
 
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <Card className="p-3 shadow-card border-none bg-accent/20">
-            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Spread Radius</p>
-            <p className="font-display text-2xl font-bold mt-1 text-foreground">
-              {(spreadRadius / 1000).toFixed(2)}<span className="text-sm text-muted-foreground ml-1">km</span>
+        {/* Stats Grid */}
+        <div className="grid grid-cols-2 gap-3">
+          <Card className="group flex flex-col justify-between overflow-hidden rounded-2xl border border-border/40 bg-gradient-to-br from-background to-secondary/30 p-3.5 shadow-sm backdrop-blur-sm transition-all duration-300 hover:shadow-md">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground opacity-80">Spread Radius</p>
+            <p className="mt-1.5 font-display text-2xl font-bold tracking-tight text-foreground">
+              {(spreadRadius / 1000).toFixed(2)}<span className="ml-1 text-[11px] font-semibold text-muted-foreground uppercase opacity-70">km</span>
             </p>
           </Card>
-          <Card className="p-3 shadow-card border-none bg-accent/20">
-            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Affected Zones</p>
-            <p className="font-display text-2xl font-bold mt-1 text-foreground">
-              {affectedAreas.length}<span className="text-sm text-muted-foreground ml-1">areas</span>
+          
+          <Card className="group flex flex-col justify-between overflow-hidden rounded-2xl border border-border/40 bg-gradient-to-br from-background to-secondary/30 p-3.5 shadow-sm backdrop-blur-sm transition-all duration-300 hover:shadow-md">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground opacity-80">Affected Zones</p>
+            <p className="mt-1.5 font-display text-2xl font-bold tracking-tight text-destructive">
+              {affectedAreas.length}<span className="ml-1 text-[11px] font-semibold text-muted-foreground uppercase opacity-70">areas</span>
             </p>
           </Card>
-          <Card className="p-3 shadow-card border-none bg-accent/20">
-            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1"><Users className="h-3 w-3"/> Est. Population</p>
-            <p className="font-display text-2xl font-bold mt-1 text-foreground">
-              {Math.floor(Math.PI * Math.pow(spreadRadius / 1000, 2) * 5000).toLocaleString()}<span className="text-sm text-muted-foreground ml-1">ppl</span>
+          
+          <Card className="group flex flex-col justify-between overflow-hidden rounded-2xl border border-border/40 bg-gradient-to-br from-background to-secondary/30 p-3.5 shadow-sm backdrop-blur-sm transition-all duration-300 hover:shadow-md">
+            <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground opacity-80">
+              <Users className="h-3.5 w-3.5" /> Est. Pop
+            </p>
+            <p className="mt-1.5 font-display text-2xl font-bold tracking-tight text-foreground">
+              {(Math.floor(Math.PI * Math.pow(spreadRadius / 1000, 2) * 50)).toLocaleString()}<span className="ml-1 text-[11px] font-semibold text-muted-foreground uppercase opacity-70">ppl</span>
             </p>
           </Card>
-          <Card className="p-3 shadow-card border-none bg-accent/20 relative overflow-hidden">
-            <div className="absolute top-0 left-0 bottom-0 bg-primary/20 transition-all duration-75" style={{ width: `${(simulationStep / 150) * 100}%` }} />
-            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider z-10 relative">Progress</p>
-            <p className="font-display text-2xl font-bold mt-1 text-foreground z-10 relative">
-              {Math.floor((simulationStep / 150) * 100)}<span className="text-sm text-muted-foreground ml-1">%</span>
+          
+          <Card className="group relative flex flex-col justify-between overflow-hidden rounded-2xl border border-border/40 bg-gradient-to-br from-primary/5 to-primary/10 p-3.5 shadow-sm backdrop-blur-sm transition-all duration-300 hover:shadow-md">
+            <div className="absolute bottom-0 left-0 bg-primary/20 transition-all duration-75" style={{ height: `${(simulationStep / 150) * 100}%`, width: '100%' }} />
+            <p className="relative z-10 text-[10px] font-bold uppercase tracking-wider text-primary/90">Progress</p>
+            <p className="relative z-10 mt-1.5 font-display text-2xl font-bold tracking-tight text-foreground">
+              {Math.floor((simulationStep / 150) * 100)}<span className="ml-1 text-[11px] font-semibold text-primary/70 uppercase">pct</span>
             </p>
           </Card>
         </div>
 
-        <Card className="p-4 shadow-card border-none bg-gradient-to-br from-card to-secondary/30">
-          <p className="text-xs font-bold text-foreground mb-3 flex items-center gap-2">
-            <MapPin className="h-4 w-4 text-primary" /> Active Impact Zones
-          </p>
-          <div className="space-y-3">
+        {/* Active Impact Zones */}
+        <Card className="flex flex-col flex-1 min-h-[180px] overflow-hidden rounded-2xl border border-border/40 bg-card p-4 shadow-sm transition-all duration-300 hover:shadow-md">
+          <div className="mb-4 flex items-center gap-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
+              <MapPin className="h-3.5 w-3.5 text-primary" />
+            </div>
+            <h3 className="text-sm font-bold text-foreground">Active Impact Zones</h3>
+          </div>
+          
+          <div className="flex-1 space-y-2.5 overflow-y-auto pr-1">
             {affectedAreas.length === 0 ? (
-              <p className="text-xs text-muted-foreground text-center py-4 bg-background/50 rounded-lg">
-                Trajectory clear. No major areas affected yet by the current wind pattern.
-              </p>
+              <div className="flex h-[120px] flex-col items-center justify-center rounded-xl border border-dashed border-border/50 bg-secondary/20 px-4 text-center">
+                <Radar className="mb-3 h-6 w-6 text-muted-foreground/60" />
+                <p className="text-[11px] font-medium text-muted-foreground/90">
+                  Trajectory clear. No major areas affected yet by the wind pattern.
+                </p>
+              </div>
             ) : (
-              affectedAreas.map(j => (
-                <div key={j.id} className="flex items-center justify-between p-2 bg-background/60 rounded-lg border border-border/50 transition-all hover:bg-background/80">
-                  <div className="flex flex-col">
-                    <span className="text-sm font-semibold text-foreground truncate">{j.name}</span>
-                    <span className="text-[10px] text-muted-foreground">Base: {j.baseAqi} AQI</span>
+              affectedAreas.map((j) => (
+                <div key={j.id} className="group flex items-center justify-between rounded-xl border border-border/40 bg-gradient-to-r from-background to-secondary/30 p-2.5 shadow-sm transition-all duration-200 hover:border-destructive/30 hover:shadow-md">
+                  <div className="flex min-w-0 flex-1 flex-col pr-3">
+                    <span className="truncate text-xs font-bold text-foreground" title={j.name}>{j.name}</span>
+                    <span className="mt-0.5 flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-widest opacity-80">
+                      Base AQI <span className="font-bold text-foreground">{j.baseAqi}</span>
+                    </span>
                   </div>
-                  <div className="flex flex-col items-end">
-                    <span className="text-sm font-bold text-destructive">+{j.addedAqi} AQI</span>
-                    <span className="text-[10px] font-medium text-destructive/80">Critical</span>
+                  <div className="flex flex-col items-end shrink-0">
+                    <span className="text-sm font-black text-destructive tracking-tight">+{j.addedAqi}</span>
+                    <span className="animate-pulse rounded-full bg-destructive/10 px-1.5 py-0.5 mt-0.5 text-[8px] font-bold uppercase tracking-widest text-destructive">Critical</span>
                   </div>
                 </div>
               ))
@@ -526,31 +556,40 @@ const PollutionSpread = () => {
           </div>
         </Card>
 
-        {affectedAreas.length > 0 ? (
-          <Card className="border-destructive/30 bg-destructive/10 p-4 shadow-card mt-4 backdrop-blur-sm">
-            <div className="flex gap-3">
-              <AlertTriangle className="h-5 w-5 shrink-0 text-destructive animate-pulse" />
-              <div>
-                <p className="text-xs font-bold text-destructive mb-1">Impact Warning</p>
-                <p className="text-[11px] text-foreground/90 leading-relaxed">
-                  Hazardous plume is tracking towards densely populated sectors. Issue immediate shelter-in-place alerts if AQI exceeds threshold.
-                </p>
+        {/* Status Alerts */}
+        <div className="shrink-0 pt-1">
+          {affectedAreas.length > 0 ? (
+            <div className="animate-in slide-in-from-bottom-2 fade-in relative overflow-hidden rounded-2xl border border-destructive/30 bg-destructive/10 p-4 shadow-sm backdrop-blur-sm">
+              <div className="absolute left-0 top-0 h-full w-1.5 bg-destructive"></div>
+              <div className="flex gap-3">
+                <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-destructive/20 shrink-0">
+                  <AlertTriangle className="h-4 w-4 text-destructive" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-widest text-destructive">Impact Warning</p>
+                  <p className="mt-1 text-xs font-semibold leading-relaxed text-foreground/80">
+                    Hazardous plume is tracking towards densely populated sectors. Issue immediate alerts.
+                  </p>
+                </div>
               </div>
             </div>
-          </Card>
-        ) : (
-          <Card className="border-success/30 bg-success/10 p-4 shadow-card mt-4 backdrop-blur-sm">
-            <div className="flex gap-3">
-              <Activity className="h-5 w-5 shrink-0 text-success" />
-              <div>
-                <p className="text-xs font-bold text-success mb-1">All Clear</p>
-                <p className="text-[11px] text-foreground/90 leading-relaxed">
-                  Pinpoint a location and run simulation to predict environmental fallout.
-                </p>
+          ) : (
+            <div className="animate-in slide-in-from-bottom-2 fade-in relative overflow-hidden rounded-2xl border border-success/30 bg-success/10 p-4 shadow-sm backdrop-blur-sm">
+              <div className="absolute left-0 top-0 h-full w-1.5 bg-success"></div>
+              <div className="flex gap-3">
+                <div className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-success/20 shrink-0">
+                  <Activity className="h-4 w-4 text-success" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-black uppercase tracking-widest text-success">All Clear</p>
+                  <p className="mt-1 text-xs font-semibold leading-relaxed text-foreground/80">
+                    Pinpoint a location and run simulation to predict environmental fallout.
+                  </p>
+                </div>
               </div>
             </div>
-          </Card>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );

@@ -41,9 +41,9 @@ except Exception as e:
 def cleanup_old_records(hours=24):
     if db is None: return
     try:
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
         cutoff = now - datetime.timedelta(hours=hours)
-        docs = db.collection("aqi_readings").where("timestamp", "<", cutoff.isoformat() + "Z").stream()
+        docs = db.collection("aqi_readings").where("timestamp", "<", cutoff.isoformat()).stream()
         count = 0
         for doc in docs:
             doc.reference.delete()
@@ -160,7 +160,11 @@ def get_openmeteo_data(lat: float, lon: float):
         return pm25, pm10, aqi, features, weather, trend
     except Exception as e:
         print(f"⚠️ OpenMeteo error: {e}")
-        return 50.0, 50.0, 75, [], {}, []
+        fallback_weather = {
+            "temperature": 25.0, "humidity": 50, "pressure": 1013.2, 
+            "windSpeed": 10.0, "windDirection": 0, "windDirectionLabel": "North", "dewPoint": 15.0
+        }
+        return 50.0, 50.0, 75, [], fallback_weather, []
 
 def aqi_to_pm25(aqi: float) -> float:
     """Inverse US AQI to PM2.5 concentration (µg/m³)."""
@@ -247,14 +251,24 @@ def predict():
             pred_pm25 = pm25 * (pred_aqi / max(live_aqi, 1))
 
         res = {
-            "success": True, "timestamp": datetime.datetime.utcnow().isoformat()+"Z", "source": source, "lat": lat, "lon": lon,
+            "success": True, "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(), "source": source, "lat": lat, "lon": lon,
             "currentAqi": int(live_aqi), "predictedAqi": int(pred_aqi), "aqiChangePct": round(((pred_aqi-live_aqi)/max(live_aqi,1))*100, 1),
             "confidence": confidence, "predictionMethod": method, "dominant": "PM2.5" if pm25>pm10/2 else "PM10", 
             "category": aqi_category(live_aqi)[0], "recommendation": aqi_category(live_aqi)[1],
             "currentPm25": round(pm25, 2), "predictedPm25": round(pred_pm25, 2), "currentPm10": round(pm10, 2),
             "weather": weather, "trafficDensity": traffic_density, "exposure": compute_exposure_risk(live_aqi),
-            "windImpact": {"direction": weather["windDirectionLabel"], "affectedSector": f"Sector {weather['windDirectionLabel']}", "affectedZone": f"Zone {weather['windDirectionLabel']}", "sectorAqiDelta": int(weather['windSpeed']*0.8)+5, "zoneAqiDelta": int(weather['windSpeed']*0.4)+2},
-            "factors": [{"name": "Traffic Density", "value": traffic_density}, {"name": "Wind Speed", "value": min(100, int(weather['windSpeed']*3))}, {"name": "Atmospheric Temp", "value": min(100, max(0, int((weather['temperature']-20)*3)))}],
+            "windImpact": {
+                "direction": weather.get("windDirectionLabel", "N/A"), 
+                "affectedSector": f"Sector {weather.get('windDirectionLabel', 'N/A')}", 
+                "affectedZone": f"Zone {weather.get('windDirectionLabel', 'N/A')}", 
+                "sectorAqiDelta": int(weather.get('windSpeed', 0)*0.8)+5, 
+                "zoneAqiDelta": int(weather.get('windSpeed', 0)*0.4)+2
+            },
+            "factors": [
+                {"name": "Traffic Density", "value": traffic_density}, 
+                {"name": "Wind Speed", "value": min(100, int(weather.get('windSpeed', 0)*3))}, 
+                {"name": "Atmospheric Temp", "value": min(100, max(0, int((weather.get('temperature', 25)-20)*3)))}
+            ],
             "trend24h": trend
         }
         

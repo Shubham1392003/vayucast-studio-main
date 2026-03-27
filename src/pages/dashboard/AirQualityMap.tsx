@@ -314,31 +314,6 @@ const AirQualityMap = () => {
           </GoogleMap>
         )}
 
-        {/* Dynamic Floating Overlays for Latest 2 Historical Readings */}
-        <div className="absolute bottom-4 left-4 right-4 flex flex-col sm:flex-row gap-3 pointer-events-none">
-          {historyMarkers.slice(0, 2).map((j, idx) => (
-            <div
-              key={idx}
-              className={`rounded-xl bg-card/95 p-3 shadow-card backdrop-blur border border-border/50 animate-in fade-in slide-in-from-bottom-2 duration-500 pointer-events-auto ${idx > 0 ? "hidden md:block" : ""}`}
-            >
-              <div className="flex items-center gap-1.5 mb-1">
-                <Database className="h-2.5 w-2.5 text-primary" />
-                <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">Historical Audit</p>
-              </div>
-              <p className="text-[10px] font-medium text-foreground truncate max-w-[150px]">{j.name}</p>
-              <div className="mt-1 flex items-center gap-4">
-                <div>
-                  <span className="text-[9px] text-muted-foreground">Past AQI</span>
-                  <p className={`font-display text-2xl font-bold ${getAqiColorClass(j.aqi)}`}>{j.aqi}</p>
-                </div>
-                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${getAqiColorClass(j.aqi, true)}`}>
-                  {j.category}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-
         {loading && (
           <div className="absolute bottom-4 right-4 rounded-full bg-card/90 px-3 py-1 text-xs text-muted-foreground shadow-card">
             Updating live data...

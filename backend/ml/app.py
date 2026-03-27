@@ -80,7 +80,6 @@ def aqi_category(aqi: float):
     for lo, hi, cat, rec in AQI_BREAKPOINTS:
         if lo <= aqi <= hi: return cat, rec
     return "Hazardous", "Emergency conditions."
-
 def pm25_to_aqi(pm25: float) -> int:
     breakpoints = [
         (0.0,   12.0,   0,   50),
@@ -96,7 +95,6 @@ def pm25_to_aqi(pm25: float) -> int:
             aqi = ((i_hi - i_lo) / (c_hi - c_lo)) * (pm25 - c_lo) + i_lo
             return int(round(aqi))
     return 500
-
 def get_google_traffic(lat: float, lon: float):
     api_key = os.getenv("VITE_GOOGLE_MAPS_API_KEY", "")
     if not api_key: return {"density": 15, "status": "No API Key"}
@@ -146,7 +144,8 @@ def get_openmeteo_data(lat: float, lon: float):
         aq_res = requests.get(aq_url, timeout=10).json()
         pm25 = aq_res["current"]["pm2_5"] or 10.0
         pm10 = aq_res["current"].get("pm10", 0) or 0.0
-        aqi  = aq_res["current"].get("us_aqi") or pm25_to_aqi(pm25)
+        # Always calculate AQI ourselves from raw concentrations for accuracy and consistency
+        aqi  = pm25_to_aqi(pm25)
         
         h_time, h_pm25, h_aqi = aq_res["hourly"]["time"], [p or pm25 for p in aq_res["hourly"]["pm2_5"]], [a or aqi for a in aq_res["hourly"].get("us_aqi", [])]
         try:
@@ -157,6 +156,9 @@ def get_openmeteo_data(lat: float, lon: float):
         trend = [{"time": t[-5:], "aqi": a, "pm25": h_pm25[-24:][i]} for i, (t, a) in enumerate(zip(h_time[-24:], h_aqi[-24:]))]
         features = [lat, lon, pm25, TEMP, PRES, DEWP, WSPM, WSPM*np.cos(np.deg2rad(WIND_DEG)), WSPM*np.sin(np.deg2rad(WIND_DEG)), datetime.datetime.now().weekday(), datetime.datetime.now().month, l1, l2, l3, (l1+l2+l3)/3]
         weather = {"temperature": round(TEMP, 1), "humidity": HUMIDITY, "pressure": round(PRES, 1), "windSpeed": round(curr["wind_speed_10m"], 1), "windDirection": WIND_DEG, "windDirectionLabel": wind_direction_label(WIND_DEG), "dewPoint": round(DEWP, 1)}
+        
+        # Capping
+        aqi = min(500, aqi)
         return pm25, pm10, aqi, features, weather, trend
     except Exception as e:
         print(f"⚠️ OpenMeteo error: {e}")
@@ -179,7 +181,11 @@ def aqi_to_pm25(aqi: float) -> float:
     for i_lo, i_hi, c_lo, c_hi in breakpoints:
         if i_lo <= aqi <= i_hi:
             return c_lo + (c_hi - c_lo) * (aqi - i_lo) / max(i_hi - i_lo, 1)
-    return pm25_to_aqi(aqi) # Fallback
+    
+    # Linear extrapolation for aqi > 500 (approx)
+    if aqi > 500:
+        return 500.4 + (aqi - 500) * 1.0 
+    return 0.0
 
 def get_waqi_data(lat: float, lon: float, api_key: str):
     """Use World Air Quality Index (WAQI) API for PM2.5 and AQI, fallback to Open-Meteo."""
@@ -192,8 +198,9 @@ def get_waqi_data(lat: float, lon: float, api_key: str):
             data = res["data"]
             # WAQI returns US EPA AQI
             if "aqi" in data and (isinstance(data["aqi"], (int, float)) or str(data["aqi"]).isdigit()):
+                # We still prefer calculating from pm25 if available in iaqi, 
+                # but we'll use this as a soft baseline if iaqi is missing.
                 aqi = int(data["aqi"])
-                # Estimate PM2.5 from global AQI as a strong baseline
                 pm25 = aqi_to_pm25(float(aqi))
             
             # If internal pollution indices are provided, refine them
@@ -209,8 +216,13 @@ def get_waqi_data(lat: float, lon: float, api_key: str):
                     pm10 = pm10_index * 1.5 
             
             if feats: feats[2] = pm25
-            source = f"WAQI: {data.get('city', {}).get('name', 'Nearest')}"
-    except: pass
+    except Exception:
+        pass
+
+    # Strict capping and re-verification for US EPA scale consistency
+    # We re-calculate one last time to ensure any WAQI refinement is synced
+    aqi = pm25_to_aqi(pm25)
+    aqi = min(500, aqi)
     return pm25, pm10, aqi, feats, weather, trend, source
 
 # ──────────────────────────────────────────────────────────────────────────────
